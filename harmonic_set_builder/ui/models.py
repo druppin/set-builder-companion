@@ -175,14 +175,39 @@ def cover_tooltip(covers, track, size: int = 220) -> Optional[str]:
     return f'<img src="data:image/png;base64,{b64}" width="{pm.width()}" height="{pm.height()}">'
 
 
-class TrackProxy(QSortFilterProxyModel):
-    """Search filter, "hide tracks already in the set", pinned pool tracks on top."""
+class SortProxy(QSortFilterProxyModel):
+    """Column sorting by each column's sort key; pinned rows stay on top.
+    Sort column -1 shows the source order (ranking, or order added)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSortRole(C.SORT_ROLE)
+
+    def lessThan(self, left, right):
+        lr = left.data(C.ROW_ROLE)
+        rr = right.data(C.ROW_ROLE)
+        if lr.pinned != rr.pinned:
+            # Keep pinned rows on top whichever way the column is sorted.
+            return lr.pinned if self.sortOrder() == Qt.AscendingOrder else rr.pinned
+        a, b = left.data(C.SORT_ROLE), right.data(C.SORT_ROLE)
+        try:
+            return a < b
+        except TypeError:
+            return str(a) < str(b)
+
+
+class TrackProxy(SortProxy):
+    """Search, "hide tracks already in the set", the filter menu, and pinned
+    pool tracks kept on top."""
+
+    FILTER_DEFAULTS = {"want": False, "in_key": False, "band": "any", "mixable": False}
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.tokens: list[str] = []
         self.hide_in_set = False
-        self.setSortRole(C.SORT_ROLE)
+        self.filters = dict(self.FILTER_DEFAULTS)
+        self.has_reference = False  # in-key / BPM filters only apply against a reference
 
     def _refilter(self, apply) -> None:
         if hasattr(self, "beginFilterChange"):  # Qt 6.10+
@@ -199,20 +224,30 @@ class TrackProxy(QSortFilterProxyModel):
     def set_hide_in_set(self, on: bool) -> None:
         self._refilter(lambda: setattr(self, "hide_in_set", on))
 
+    def set_filters(self, **changes) -> None:
+        self._refilter(lambda: self.filters.update(changes))
+
+    def set_has_reference(self, on: bool) -> None:
+        if on != self.has_reference:
+            self._refilter(lambda: setattr(self, "has_reference", on))
+
+    def active_filters(self) -> int:
+        return sum(1 for k, v in self.filters.items() if v != self.FILTER_DEFAULTS[k])
+
     def filterAcceptsRow(self, source_row, source_parent):
         r: C.Row = self.sourceModel().rows[source_row]
+        f = self.filters
         if self.hide_in_set and r.in_set:
             return False
+        if f["want"] and not r.want:
+            return False
+        if f["mixable"] and not (r.track and r.track.mixable):
+            return False
+        if self.has_reference:
+            if f["in_key"] and not (r.rel and r.rel.in_key):
+                return False
+            if f["band"] != "any":
+                ok = ("safe",) if f["band"] == "safe" else ("safe", "caution")
+                if not (r.rel and r.rel.bpm and r.rel.bpm.band in ok):
+                    return False
         return all(t in r.haystack for t in self.tokens)
-
-    def lessThan(self, left, right):
-        lr = left.data(C.ROW_ROLE)
-        rr = right.data(C.ROW_ROLE)
-        if lr.pinned != rr.pinned:
-            # Keep pinned rows on top whichever way the column is sorted.
-            return lr.pinned if self.sortOrder() == Qt.AscendingOrder else rr.pinned
-        a, b = left.data(C.SORT_ROLE), right.data(C.SORT_ROLE)
-        try:
-            return a < b
-        except TypeError:
-            return str(a) < str(b)

@@ -13,6 +13,7 @@ class Settings:
     bpm: BpmSettings = field(default_factory=BpmSettings)
     energy_moves_in_key: bool = True  # False = strict practice: +2/semitone are breaks
     keylock: bool = True
+    mix_overlap_bars: int = 16  # set-length estimate: bars two tracks play together
     energy_baseline: int = 5
     energy_from_tags: bool = False  # use "Energy N" comment tags as absolute levels
     # Overrides of the move table: {move name: {"label": str, "energy": int}}

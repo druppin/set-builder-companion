@@ -30,9 +30,14 @@ Tests: `.venv/bin/pytest` (UI tests run offscreen).
 - **Track table** (middle): Mixxx's columns plus Move / Mood / Energy Δ / BPM Δ / Tier / ½·2×
   against the reference track (selected setlist row, else the last track). Default order is the
   suggestion ranking; *Suggested order* returns to it. Right-click the header to choose columns.
+- **Filters** (above the track table): **★ To be added only** shows just the tracks you want to play;
+  **Filters ▾** adds *In key with the reference track*, *BPM from the reference track* (Safe only / Safe or
+  Caution) and *Only tracks with a key and BPM*. They combine with search and "Hide tracks already in the
+  set", the count shows how many tracks are visible, and the choice is remembered.
 - **Setlist** (left): drag tracks in, drag rows to reorder, Delete to remove, double-click a track to
   append. Red = key clash with the previous track, amber = duplicate. Undo/redo covers everything.
-- **To be added**: tracks you want to play later. Right-click (or ⋯) → *Suggest where to place it*
+- **To be added**: tracks you want to play later. Click a column header to sort it like the track table
+  (right-click the header → *Unsort* to go back to the order you added them). Right-click (or ⋯) → *Suggest where to place it*
   or *Show me how to get here*, which opens a route of dashed transitional entries. Click the first
   one to see its candidates; drop or double-click a track to fill it.
 - **Help me fix key mixing mistakes**: shows **＋** on red rows; click it to bridge the clash.
@@ -45,6 +50,9 @@ Tests: `.venv/bin/pytest` (UI tests run offscreen).
   the audio (MP3/ID3, FLAC, M4A) or a `cover`/`folder`/`front` image in the album folder. They load in the
   background and are cached as small PNGs in the app data directory (`covers/`), so the drive isn't
   re-read each launch. After mounting a drive, *Refresh library* (Ctrl+R) picks up covers that were missing.
+- **Set length**: under the setlist, e.g. "14 tracks · ≈ 43:11 mixed (49:41 back to back)". The mixed
+  estimate subtracts a 16-bar overlap per transition at the incoming tempo (*Settings → Mixing → Mix overlap*;
+  0 = back to back). With a route open it also shows the length including the transitions still to fill.
 - **Sources**: clicking the Crates / Playlists headings folds them; the focused source stays highlighted.
 
 Sets autosave (debounced 0.5 s, atomic, last 20 versions) to the app data directory

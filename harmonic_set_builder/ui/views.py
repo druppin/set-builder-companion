@@ -109,6 +109,9 @@ class RowTable(QTableView):
             act.setChecked(not h.isSectionHidden(i))
             act.toggled.connect(lambda on, i=i: (h.setSectionHidden(i, not on), self.layoutChanged.emit()))
         menu.addSeparator()
+        if self.isSortingEnabled():
+            label = "Suggested order" if self.kind == "track" else "Order added"
+            menu.addAction(f"Unsort ({label})", lambda: self.sortByColumn(-1, Qt.AscendingOrder))
         menu.addAction("Reset columns", lambda: (self.apply_defaults(), self.layoutChanged.emit()))
         menu.exec(h.mapToGlobal(pos))
 

@@ -8,6 +8,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QUndoCommand, QUndoStack
 
+from ..core import duration as dur
 from ..core import route as route_mod
 from ..core.camelot import format_key
 from ..core.ranking import rank_key, relate
@@ -316,10 +317,45 @@ class Controller(QObject):
         tracks = self.real_tracks()
         if as_text:
             rels = [None] + [relate(a, b, self.settings) for a, b in zip(tracks, tracks[1:])]
-            Path(path).write_text(export.tracklist_text(tracks, rels, self.settings.key_notation), encoding="utf-8")
+            d = dur.estimate([dur.Item(t.duration, t.bpm) for t in tracks], self.settings.mix_overlap_bars)
+            text = export.tracklist_text(tracks, rels, self.settings.key_notation)
+            text += f"\nEstimated length ≈ {dur.fmt(d.mixed)} ({self.settings.mix_overlap_bars}-bar mixes)\n"
+            Path(path).write_text(text, encoding="utf-8")
         else:
             export.write_m3u8(Path(path), tracks)
         self.message.emit(f"Exported {len(tracks)} tracks to {path}")
+
+    def duration_summary(self) -> tuple[str, str]:
+        """(label, tooltip) for the estimated set length."""
+        bars = self.settings.mix_overlap_bars
+        real_items, all_items = [], []
+        for e in self.model.entries:
+            if e.kind == SLOT:
+                cands = [t for t in (self.library.get(i) for i in e.slot.candidates) if t and t.duration]
+                durs = sorted(t.duration for t in cands)
+                item = dur.Item(durs[len(durs) // 2] if durs else None, (e.slot.bpm_min + e.slot.bpm_max) / 2)
+            else:
+                t = self.library.resolve(e.ref)
+                item = dur.Item(t.duration if t else None, t.bpm if t else None)
+                if e.is_real:
+                    real_items.append(item)
+            all_items.append(item)
+        if not real_items:
+            return "Empty set", ""
+        d = dur.estimate(real_items, bars)
+        n = d.tracks
+        text = f"{n} track{'s' if n != 1 else ''} · ≈ {dur.fmt(d.mixed)} mixed"
+        if bars:
+            text += f" ({dur.fmt(d.back_to_back)} back to back)"
+        if d.unknown:
+            text += f" · {d.unknown} without a length"
+        if len(all_items) > len(real_items):
+            text += f" · with route ≈ {dur.fmt(dur.estimate(all_items, bars).mixed)}"
+        tip = (f"Track lengths added up, minus a {bars}-bar overlap per transition at the incoming "
+               "track's tempo (change it in Settings → Mixing)." if bars else "Track lengths added up.")
+        if len(all_items) > len(real_items):
+            tip += "\nWith route: unfilled transitions count as a typical candidate's length."
+        return text, tip
 
     # ----------------------------------------------------------------- rows
     def anchor_track(self) -> Optional[Track]:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QItemSelectionModel, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QToolBar, QToolButton,
@@ -17,7 +17,7 @@ from ..core.setlist import POOL_ROUTE
 from . import columns as C
 from .controller import Controller
 from .graph import EnergyGraph
-from .models import RowModel, TrackProxy
+from .models import RowModel, SortProxy, TrackProxy
 from .covers import CoverCache
 from .models import cover_tooltip
 from .preview import PreviewBar
@@ -53,8 +53,12 @@ class MainWindow(QMainWindow):
 
         self.pool_model = RowModel("pool", C.POOL_COLUMNS)
         self.pool_model.on_drop = lambda payload, row: ctrl.drop_on_pool(payload)
+        self.pool_proxy = SortProxy()
+        self.pool_proxy.setSourceModel(self.pool_model)
         self.pool_view = RowTable("pool")
-        self.pool_view.setModel(self.pool_model)
+        self.pool_view.setModel(self.pool_proxy)
+        self.pool_view.setSortingEnabled(True)
+        self.pool_view.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self.pool_view.setup_drag(True)
         self.pool_view.clicked.connect(self._pool_clicked)
         self.pool_view.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -66,7 +70,15 @@ class MainWindow(QMainWindow):
         lv.setContentsMargins(0, 0, 0, 0)
         lv.addWidget(self._build_set_toolbar())
         self.left_split = QSplitter(Qt.Vertical)
-        self.left_split.addWidget(self.set_view)
+        set_box = QWidget()
+        sv = QVBoxLayout(set_box)
+        sv.setContentsMargins(0, 0, 0, 0)
+        sv.setSpacing(0)
+        sv.addWidget(self.set_view)
+        self.duration_label = QLabel()
+        self.duration_label.setObjectName("hint")
+        sv.addWidget(self.duration_label)
+        self.left_split.addWidget(set_box)
         pool_box = QWidget()
         pv = QVBoxLayout(pool_box)
         pv.setContentsMargins(0, 0, 0, 0)
@@ -102,9 +114,18 @@ class MainWindow(QMainWindow):
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("Search the focused source…")
         self.filter.setClearButtonEnabled(True)
-        self.filter.textChanged.connect(self.proxy.set_filter)
+        self.filter.textChanged.connect(lambda text: (self.proxy.set_filter(text), self._update_count()))
         self.hide_cb = QCheckBox("Hide tracks already in the set")
         self.hide_cb.toggled.connect(self._hide_toggled)
+        self.want_btn = QToolButton(text="★ To be added only")
+        self.want_btn.setCheckable(True)
+        self.want_btn.setToolTip("Show only tracks you've put in To be added")
+        self.want_btn.toggled.connect(lambda on: self._set_filter(want=on))
+        self.filter_btn = QToolButton(text="Filters ▾")
+        self.filter_btn.setPopupMode(QToolButton.InstantPopup)
+        self.filter_btn.setMenu(self._build_filter_menu())
+        self.count_label = QLabel()
+        self.count_label.setObjectName("hint")
         suggested = QPushButton("Suggested order")
         suggested.setToolTip("Sort by suggestion ranking: tier, BPM band, |ΔBPM|, rating")
         suggested.clicked.connect(lambda: self.track_view.sortByColumn(-1, Qt.AscendingOrder))
@@ -117,6 +138,9 @@ class MainWindow(QMainWindow):
         mv.setContentsMargins(0, 0, 0, 0)
         bar = QHBoxLayout()
         bar.addWidget(self.filter, 1)
+        bar.addWidget(self.want_btn)
+        bar.addWidget(self.filter_btn)
+        bar.addWidget(self.count_label)
         bar.addWidget(self.hide_cb)
         bar.addWidget(suggested)
         mv.addLayout(bar)
@@ -293,6 +317,9 @@ class MainWindow(QMainWindow):
         self.graph.set_points(pts)
         self.pool_model.set_rows(self.ctrl.pool_rows())
         self.pool_toggle.setText(f"To be added ({len(self.ctrl.model.pool)})")
+        text, tip = self.ctrl.duration_summary()
+        self.duration_label.setText(text)
+        self.duration_label.setToolTip(tip)
         route = self.ctrl.model.route
         self.stop_action.setVisible(route is not None)
         if route:
@@ -310,6 +337,8 @@ class MainWindow(QMainWindow):
         elif col >= 0:
             self.proxy.sort(col, order)
         self.proxy.set_hide_in_set(self.ctrl.hide_in_set)
+        self.proxy.set_has_reference(self.ctrl.reference_track() is not None)
+        self._update_count()
         self.banner.setVisible(bool(banner))
         self.banner.setText(banner)
         ref = self.ctrl.reference_track()
@@ -503,6 +532,58 @@ class MainWindow(QMainWindow):
     def _hide_toggled(self, on: bool) -> None:
         self.ctrl.set_hide_in_set(on)
 
+    # ------------------------------------------------------------- filters
+    def _build_filter_menu(self) -> QMenu:
+        m = QMenu(self)
+        self.f_in_key = m.addAction("In key with the reference track")
+        self.f_in_key.setToolTip("Smooth or Energy moves from the “Compared with” track")
+        self.f_in_key.setCheckable(True)
+        self.f_in_key.toggled.connect(lambda on: self._set_filter(in_key=on))
+        bpm = m.addMenu("BPM from the reference track")
+        group = QActionGroup(self)
+        self.f_band = {}
+        for key, label in (("any", "Any"), ("safe", "Safe only"), ("caution", "Safe or Caution")):
+            a = bpm.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(key == "any")
+            group.addAction(a)
+            a.triggered.connect(lambda _=False, k=key: self._set_filter(band=k))
+            self.f_band[key] = a
+        self.f_mixable = m.addAction("Only tracks with a key and BPM")
+        self.f_mixable.setCheckable(True)
+        self.f_mixable.toggled.connect(lambda on: self._set_filter(mixable=on))
+        m.addSeparator()
+        m.addAction("Clear filters", self._clear_filters)
+        return m
+
+    def _set_filter(self, **changes) -> None:
+        self.proxy.set_filters(**changes)
+        self._update_count()
+        self._layout_timer.start()
+
+    def _apply_filter_widgets(self, f: dict) -> None:
+        f = {**TrackProxy.FILTER_DEFAULTS, **(f or {})}
+        self.want_btn.setChecked(f["want"])
+        self.f_in_key.setChecked(f["in_key"])
+        self.f_band.get(f["band"], self.f_band["any"]).setChecked(True)
+        self.f_mixable.setChecked(f["mixable"])
+        self.proxy.set_filters(**f)
+        self._update_count()
+
+    def _clear_filters(self) -> None:
+        self._apply_filter_widgets(TrackProxy.FILTER_DEFAULTS)
+        self.filter.clear()
+        self._layout_timer.start()
+
+    def _update_count(self) -> None:
+        n = self.proxy.active_filters() - int(self.proxy.filters["want"])  # ★ has its own button
+        self.filter_btn.setText(f"Filters ({n}) ▾" if n else "Filters ▾")
+        shown, total = self.proxy.rowCount(), self.track_model.rowCount()
+        self.count_label.setText(f"{shown} of {total}" if shown != total else f"{total} tracks")
+        ignored = not self.proxy.has_reference and (self.proxy.filters["in_key"] or self.proxy.filters["band"] != "any")
+        self.count_label.setToolTip("In-key and BPM filters apply once the set has a track to compare with"
+                                    if ignored else "")
+
     # ------------------------------------------------------------- dialogs
     def _set_chosen(self, i: int) -> None:
         sid = self.set_combo.itemData(i)
@@ -605,6 +686,7 @@ class MainWindow(QMainWindow):
             "track_cols": self.track_view.state(),
             "pool_open": self.pool_toggle.isChecked(),
             "preview_volume": self.preview.volume.value() / 100,
+            "filters": dict(self.proxy.filters),
         })
         self.ctrl.config.save()
 
@@ -620,6 +702,7 @@ class MainWindow(QMainWindow):
         self.pool_view.restore(ui.get("pool_cols"))
         self.track_view.restore(ui.get("track_cols"))
         self.pool_toggle.setChecked(ui.get("pool_open", True))
+        self._apply_filter_widgets(ui.get("filters"))
 
     def closeEvent(self, ev) -> None:
         self.ctrl.save_now()

@@ -186,3 +186,63 @@ def test_sources_selection_survives_heading_click(qtbot):
     assert tree.selectedItems() == [house]
     click(crates)
     assert crates.isExpanded() and tree.selectedItems() == [house]
+
+
+def test_duration_label(win):
+    for i in (1, 3, 4):
+        win.ctrl.library.get(i).duration = 300
+    assert win.duration_label.text() == "Empty set"
+    drop(win.set_model, "track", [1, 3, 4])
+    assert win.duration_label.text() == "3 tracks · ≈ 14:00 mixed (15:00 back to back)"
+    drop(win.pool_model, "track", [2])
+    win.ctrl.library.get(2).duration = 300
+    win.ctrl.open_pool_route(win.ctrl.model.pool[0].uid)  # 10A -> 11A is direct: completes
+    assert win.duration_label.text().startswith("4 tracks · ≈ 18:30 mixed")
+
+
+def test_track_filters(win):
+    # library: 8A, 11A, 9A, 10A, 7A (all 128 BPM)
+    win.ctrl.library.get(5).bpm = 140  # 7A: Danger BPM from 8A
+    drop(win.pool_model, "track", [2, 4])
+    win.want_btn.setChecked(True)
+    assert sorted(win.proxy.index(i, 0).data(Qt.UserRole + 1).track.id for i in range(win.proxy.rowCount())) == [2, 4]
+    assert win.count_label.text() == "2 of 5"
+    win.want_btn.setChecked(False)
+
+    win.f_in_key.setChecked(True)  # no reference yet: ignored
+    assert win.proxy.rowCount() == 5
+    drop(win.set_model, "track", [1])  # reference 8A
+    ids = sorted(win.proxy.index(i, 0).data(Qt.UserRole + 1).track.id for i in range(win.proxy.rowCount()))
+    assert ids == [1, 3, 5]  # 11A is off-key; strict mode makes 10A (+2) a break
+    assert win.filter_btn.text() == "Filters (1) ▾"
+    win.f_band["safe"].trigger()
+    ids = sorted(win.proxy.index(i, 0).data(Qt.UserRole + 1).track.id for i in range(win.proxy.rowCount()))
+    assert 5 not in ids
+    win._clear_filters()
+    assert win.proxy.rowCount() == 5 and win.filter_btn.text() == "Filters ▾"
+    win.save_layout()
+    assert win.ctrl.config.get("ui")["filters"]["band"] == "any"
+
+
+def test_pool_sorts_by_column_and_keeps_drops_working(win):
+    lib = win.ctrl.library
+    lib.get(3).artist, lib.get(4).artist, lib.get(5).artist = "Charlie", "Alpha", "Bravo"
+    drop(win.pool_model, "track", [3, 4, 5])
+
+    def shown():
+        p = win.pool_proxy
+        return [p.index(i, 0).data(Qt.UserRole + 1).track.id for i in range(p.rowCount())]
+
+    assert shown() == [3, 4, 5]  # order added
+    artist = win.pool_model.col_index("artist")
+    win.pool_view.sortByColumn(artist, Qt.AscendingOrder)
+    assert shown() == [4, 5, 3]
+    win.pool_view.sortByColumn(artist, Qt.DescendingOrder)
+    assert shown() == [3, 5, 4]
+    drop(win.pool_proxy, "track", [1])  # dropping still goes through the proxy
+    assert 1 in shown() and shown()[-1] == 4  # new row sorted in
+    win.pool_view.sortByColumn(-1, Qt.AscendingOrder)
+    assert shown() == [3, 4, 5, 1]
+    # the ⋯ / ▶ columns still resolve the right row through the proxy
+    idx = win.pool_proxy.index(1, win.pool_model.col_index("artist"))
+    assert win._row_at(win.pool_view, idx).track.id == 4

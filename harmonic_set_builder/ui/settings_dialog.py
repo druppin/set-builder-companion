@@ -37,6 +37,10 @@ class SettingsDialog(QDialog):
         f.addRow(self.half)
         f.addRow(self.keylock)
         f.addRow(self.energy_in_key)
+        self.overlap = QSpinBox(minimum=0, maximum=128, value=s.mix_overlap_bars, suffix=" bars")
+        self.overlap.setToolTip("How long two tracks play together in a mix, for the set-length estimate "
+                                "(0 = back to back)")
+        f.addRow("Mix overlap", self.overlap)
         tabs.addTab(mix, "Mixing")
 
         en = QWidget()
@@ -107,6 +111,7 @@ class SettingsDialog(QDialog):
         self.half.setChecked(d.bpm.half_double)
         self.keylock.setChecked(d.keylock)
         self.energy_in_key.setChecked(d.energy_moves_in_key)
+        self.overlap.setValue(d.mix_overlap_bars)
         self.baseline.setValue(d.energy_baseline)
         self.tags.setChecked(d.energy_from_tags)
         for i, m in enumerate(DEFAULT_MOVES.values()):
@@ -125,6 +130,7 @@ class SettingsDialog(QDialog):
         s.bpm.half_double = self.half.isChecked()
         s.keylock = self.keylock.isChecked()
         s.energy_moves_in_key = self.energy_in_key.isChecked()
+        s.mix_overlap_bars = self.overlap.value()
         s.energy_baseline = self.baseline.value()
         s.energy_from_tags = self.tags.isChecked()
         overrides = {}
