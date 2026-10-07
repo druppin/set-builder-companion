@@ -59,6 +59,7 @@ class Entry:
     ref: Optional[TrackRef] = None  # REAL and TARGET
     slot: Optional[route_mod.Slot] = None  # SLOT
     uid: str = field(default_factory=new_uid)
+    from_pool: bool = False  # came from To be added: goes back there if removed
 
     @property
     def is_real(self) -> bool:
@@ -66,6 +67,8 @@ class Entry:
 
     def to_dict(self) -> dict:
         d = {"uid": self.uid, "kind": self.kind}
+        if self.from_pool:
+            d["from_pool"] = True
         if self.ref:
             d["ref"] = self.ref.to_dict()
         if self.slot:
@@ -79,6 +82,7 @@ class Entry:
             TrackRef.from_dict(d["ref"]) if d.get("ref") else None,
             route_mod.Slot.from_dict(d["slot"]) if d.get("slot") else None,
             d.get("uid") or new_uid(),
+            bool(d.get("from_pool")),
         )
 
 
@@ -238,9 +242,18 @@ class SetModel:
         if zone and zone[0] <= index <= zone[1]:
             return self.fill(tracks, ctx)
         for off, t in enumerate(tracks):
-            self.entries.insert(index + off, Entry(REAL, TrackRef.of(t)))
-        self._normalize(ctx)
+            self.entries.insert(index + off, self._take(TrackRef.of(t)))
+        self._normalize(ctx)  # closes a pool route whose target was just placed
         return Outcome()
+
+    def _take(self, ref: TrackRef) -> Entry:
+        """A new set entry for ``ref``; a matching To be added track leaves the pool."""
+        e = Entry(REAL, ref)
+        hit = next((p for p in self.pool if p.ref.track_id == ref.track_id), None)
+        if hit:
+            self.pool.remove(hit)
+            e.from_pool = True
+        return e
 
     def move_entries(self, uids: Sequence[str], index: int, ctx: Context) -> Outcome:
         """Reorder real rows. Dropping them onto the route block moves them into it."""
@@ -265,7 +278,14 @@ class SetModel:
 
     def remove_entries(self, uids: Iterable[str], ctx: Context) -> None:
         uids = set(uids)
-        self.entries = [e for e in self.entries if not (e.uid in uids and e.is_real)]
+        removed = [e for e in self.entries if e.uid in uids and e.is_real]
+        self.entries = [e for e in self.entries if e not in removed]
+        # Tracks that came from To be added go back there, unless still in the set.
+        still = self.set_track_ids() | self.pool_track_ids()
+        for e in removed:
+            if e.from_pool and e.ref.track_id not in still:
+                self.pool.append(PoolItem(e.ref))
+                still.add(e.ref.track_id)
         self._normalize(ctx)
 
     def add_to_pool(self, tracks: Sequence[Track]) -> None:
@@ -293,7 +313,7 @@ class SetModel:
         if self.route and self.route.kind == POOL_ROUTE and self.route.target_uid == pool_uid:
             self.close_route()
         self.pool.remove(p)
-        self.entries.insert(idx, Entry(REAL, p.ref))
+        self.entries.insert(idx, Entry(REAL, p.ref, from_pool=True))
         self._normalize(ctx)
 
     # -------------------------------------------------------------- routes
@@ -330,13 +350,14 @@ class SetModel:
         out = Outcome()
         for n, t in enumerate(tracks):
             if not self.route:  # completed by an earlier track: plain append
-                self.entries.append(moved[n] if moved else Entry(REAL, TrackRef.of(t)))
+                self.entries.append(moved[n] if moved else self._take(TrackRef.of(t)))
                 continue
             slot_entry = next((e for e in self.entries if e.kind == SLOT), None)
             fitted = bool(slot_entry and route_mod.fits_slot(t, slot_entry.slot))
             pool_hit = next((p for p in self.pool if p.ref.track_id == t.id), None)
             a = self.index_of(self.route.anchor_uid)
             new = moved[n] if moved else Entry(REAL, TrackRef.of(t))
+            new.from_pool = new.from_pool or bool(pool_hit)
             if pool_hit and self.route.kind == POOL_ROUTE and self.route.target_uid == pool_hit.uid:
                 # Dropped the target itself: the route is done, whatever the key.
                 self._strip_route_entries()
@@ -392,7 +413,7 @@ class SetModel:
             a_idx = self.index_of(r.anchor_uid)
             self.route = None
             self.pool.remove(p)
-            self.entries.insert(a_idx + 1, Entry(REAL, p.ref))
+            self.entries.insert(a_idx + 1, Entry(REAL, p.ref, from_pool=True))
             return Outcome("Route complete: target added to the set.", completed=True)
         self.route = None
         return Outcome("Key mistake fixed.", completed=True)

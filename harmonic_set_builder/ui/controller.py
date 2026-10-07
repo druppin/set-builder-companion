@@ -226,15 +226,9 @@ class Controller(QObject):
         if not tracks:
             return
 
-        def do(c):
-            out = self.model.insert_tracks(tracks, row, c)
-            if src == "pool":
-                for uid in payload.get("uids", []):
-                    if self.model.pool_item(uid):
-                        self.model.remove_from_pool(uid, c)
-            return out
-
-        self.mutate("Fill transition" if self._in_zone(row) else "Add tracks", do)
+        # Tracks from To be added leave it as they enter the set (SetModel._take).
+        self.mutate("Fill transition" if self._in_zone(row) else "Add tracks",
+                    lambda c: self.model.insert_tracks(tracks, row, c))
 
     def _in_zone(self, row: int) -> bool:
         z = self.model.route_zone()

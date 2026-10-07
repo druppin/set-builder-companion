@@ -246,3 +246,16 @@ def test_pool_sorts_by_column_and_keeps_drops_working(win):
     # the ⋯ / ▶ columns still resolve the right row through the proxy
     idx = win.pool_proxy.index(1, win.pool_model.col_index("artist"))
     assert win._row_at(win.pool_view, idx).track.id == 4
+
+
+def test_pool_round_trip_through_the_ui(win, qtbot):
+    drop(win.pool_model, "track", [3])
+    assert win.pool_toggle.text() == "To be added (1)"
+    drop(win.set_model, "track", [1, 3])  # dragged in from the track table
+    assert win.pool_toggle.text() == "To be added (0)"
+    win.set_view.selectRow(1)
+    win._delete_selected()
+    assert set_ids(win) == [1]
+    assert win.pool_toggle.text() == "To be added (1)"
+    win.ctrl.undo.undo()  # undoing the delete takes it back out again
+    assert win.pool_toggle.text() == "To be added (0)" and set_ids(win) == [1, 3]

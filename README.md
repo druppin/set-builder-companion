@@ -37,7 +37,9 @@ Tests: `.venv/bin/pytest` (UI tests run offscreen).
 - **Setlist** (left): drag tracks in, drag rows to reorder, Delete to remove, double-click a track to
   append. Red = key clash with the previous track, amber = duplicate. Undo/redo covers everything.
 - **To be added**: tracks you want to play later. Click a column header to sort it like the track table
-  (right-click the header → *Unsort* to go back to the order you added them). Right-click (or ⋯) → *Suggest where to place it*
+  (right-click the header → *Unsort* to go back to the order you added them). A track leaves the list as soon as
+  it's added to the set (by drag, double-click, filling a transition or a finished route) and comes back
+  if it's removed from the set again, unless another copy is still in the set. Right-click (or ⋯) → *Suggest where to place it*
   or *Show me how to get here*, which opens a route of dashed transitional entries. Click the first
   one to see its candidates; drop or double-click a track to fill it.
 - **Help me fix key mixing mistakes**: shows **＋** on red rows; click it to bridge the clash.
@@ -95,7 +97,6 @@ Defaults from section 9 of the brief are used unless noted.
   2 = history, −1 = internal placeholder (never shown).
 - Crates have no order; imported crates use artist, title (Mixxx's default sort).
 - Fix mode shows the **＋** in a narrow column on the red row itself rather than in the gap above it.
-- Dragging a pool track into the setlist removes it from To be added (it has been added).
 - In slot view, a setlist row dragged onto the slot is always **moved**; the brief's exception
   ("unless Hide tracks already in the set is checked") was ambiguous and is not implemented.
 - Undo uses whole-set snapshots per command (sets are small), so every mutation is undoable uniformly.

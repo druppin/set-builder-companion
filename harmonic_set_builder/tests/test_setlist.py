@@ -226,3 +226,62 @@ def test_missing_track_reported():
     m.insert_tracks([A, tr(99, "8A")], None, c)
     rows = m.analyze(c)
     assert rows[1].missing and not rows[0].missing
+
+
+# ------------------------------------------------- To be added round trip
+def pool_ids(m):
+    return [p.ref.track_id for p in m.pool]
+
+
+def test_adding_a_pool_track_takes_it_out_and_removing_puts_it_back(ctx):
+    m = SetModel()
+    m.add_to_pool([N9, N10])
+    m.insert_tracks([A, N9], None, ctx)  # e.g. dragged in from the track table
+    assert pool_ids(m) == [4]
+    assert m.entries[1].from_pool and not m.entries[0].from_pool
+    m.remove_entries([m.entries[1].uid], ctx)
+    assert pool_ids(m) == [4, 3]
+
+
+def test_tracks_not_from_the_pool_do_not_go_there(ctx):
+    m = SetModel()
+    m.insert_tracks([A, N9], None, ctx)
+    m.remove_entries([e.uid for e in m.entries], ctx)
+    assert m.pool == []
+
+
+def test_duplicate_stays_out_until_last_copy_removed(ctx):
+    m = SetModel()
+    m.add_to_pool([N9])
+    m.insert_tracks([N9], None, ctx)
+    m.insert_tracks([N9], None, ctx)  # a second copy (not from the pool any more)
+    first, second = m.entries[0].uid, m.entries[1].uid
+    m.remove_entries([second], ctx)
+    assert m.pool == []  # the from-pool copy is still in the set
+    m.remove_entries([first], ctx)
+    assert pool_ids(m) == [3]
+
+
+def test_insert_here_fill_and_completed_target_return_to_pool(routed, ctx):
+    routed.add_to_pool([N9])
+    routed.fill([N9], ctx)  # pool track fills a transition
+    routed.fill([N10], ctx)  # completes: target T enters the set
+    assert routed.route is None and routed.pool == []
+    assert [e.from_pool for e in routed.entries] == [False, True, False, True]
+    routed.remove_entries([routed.entries[3].uid, routed.entries[1].uid], ctx)
+    assert sorted(pool_ids(routed)) == [2, 3]
+
+
+def test_placing_route_target_directly_closes_route(routed, ctx):
+    routed.insert_tracks([T], 0, ctx)  # target dropped earlier in the set
+    assert routed.route is None and routed.pool == []
+    assert kinds(routed) == [REAL, REAL]
+
+
+def test_from_pool_survives_save_and_undo_snapshots(ctx):
+    m = SetModel()
+    m.add_to_pool([N9])
+    m.insert_tracks([N9], None, ctx)
+    copy = SetModel.from_dict(m.to_dict())
+    copy.remove_entries([copy.entries[0].uid], ctx)
+    assert pool_ids(copy) == [3]
