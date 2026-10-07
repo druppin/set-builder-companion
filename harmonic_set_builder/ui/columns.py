@@ -147,6 +147,7 @@ COLUMNS: list[Col] = [
     Col("pos", "#", 36, lambda r, n: r.pos or "", lambda r: r.pos or 0, True),
     Col("fix", "", 26, lambda r, n: "＋" if r.fixable else "", tooltip="Bridge this key clash"),
     Col("menu", "", 26, lambda r, n: "⋯", tooltip="Actions"),
+    Col("preview", "▶", 28, lambda r, n: "▶" if r.track else "", tooltip="Preview (Space)"),
     Col("artist", "Artist", 160, _t("artist", 0)),
     Col("title", "Title", 220, _t("title", 1)),
     Col("album", "Album", 150, _t("album")),
@@ -185,10 +186,10 @@ SET_COLUMNS = [c.id for c in COLUMNS if c.id != "menu"]
 POOL_COLUMNS = [c.id for c in COLUMNS if c.id not in ("pos", "fix")]
 
 DEFAULT_VISIBLE = {
-    "track": ["artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta", "tier", "half",
+    "track": ["preview", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta", "tier", "half",
               "in_set", "want", "genre", "duration", "rating"],
-    "set": ["fix", "pos", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta"],
-    "pool": ["menu", "artist", "title", "key", "bpm", "move", "bpm_delta"],
+    "set": ["fix", "preview", "pos", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta"],
+    "pool": ["menu", "preview", "artist", "title", "key", "bpm", "move", "bpm_delta"],
 }
 
 
@@ -203,7 +204,7 @@ def foreground(col: Col, r: Row) -> Optional[QColor]:
         return theme.BAND_COLORS[r.rel.bpm.band]
     if col.id in ("tier", "move") and r.rel and r.rel.move:
         return theme.TIER_COLORS[r.rel.move.tier]
-    if col.id in ("want", "fix"):
+    if col.id in ("want", "fix", "preview"):
         return theme.ACCENT
     if r.missing:
         return theme.DIM

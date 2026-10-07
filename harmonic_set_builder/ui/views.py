@@ -102,7 +102,7 @@ class RowTable(QTableView):
         h = self.horizontalHeader()
         menu = QMenu(self)
         for i, c in enumerate(self.model_cols()):
-            label = c.header or {"fix": "Fix (+)", "menu": "Actions (⋯)"}.get(c.id, c.id)
+            label = {"fix": "Fix (+)", "menu": "Actions (⋯)", "preview": "Preview (▶)"}.get(c.id, c.header or c.id)
             act = menu.addAction(label)
             act.setCheckable(True)
             act.setChecked(not h.isSectionHidden(i))

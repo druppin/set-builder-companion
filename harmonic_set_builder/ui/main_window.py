@@ -18,6 +18,7 @@ from . import columns as C
 from .controller import Controller
 from .graph import EnergyGraph
 from .models import RowModel, TrackProxy
+from .preview import PreviewBar
 from .settings_dialog import SettingsDialog
 from .sources import SourcesTree
 from .views import RowTable
@@ -132,7 +133,25 @@ class MainWindow(QMainWindow):
         self.top_split.addWidget(self.graph)
         self.top_split.addWidget(self.main_split)
         self.top_split.setSizes([200, 700])
-        self.setCentralWidget(self.top_split)
+
+        # ---- preview player
+        self.preview = PreviewBar((ctrl.config.get("ui", {}) or {}).get("preview_volume", 0.8))
+        self.preview.message.connect(lambda m: self.statusBar().showMessage(m, 10000))
+        self.preview.playingChanged.connect(self._playing_changed)
+        central = QWidget()
+        cv = QVBoxLayout(central)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
+        cv.addWidget(self.top_split, 1)
+        cv.addWidget(self.preview)
+        self.setCentralWidget(central)
+        for view in (self.set_view, self.pool_view, self.track_view):
+            act = QAction("Preview", view)
+            act.setShortcut(QKeySequence(Qt.Key_Space))
+            act.setShortcutContext(Qt.WidgetShortcut)
+            act.triggered.connect(lambda _=False, v=view: self._preview_current(v))
+            view.addAction(act)
+        self.track_view.clicked.connect(self._track_clicked)
 
         self.snapshot_label = QLabel()
         self.statusBar().addPermanentWidget(self.snapshot_label)
@@ -242,6 +261,7 @@ class MainWindow(QMainWindow):
         self.snapshot_label.setText(f"Library snapshot {when} · {len(lib.tracks)} tracks")
         for m in (self.set_model, self.pool_model, self.track_model):
             m.notation = s.key_notation
+        self.preview.notation = s.key_notation
         self._view_changed()
 
     def _set_changed(self) -> None:
@@ -306,7 +326,9 @@ class MainWindow(QMainWindow):
         if r is None:
             return
         col = self.set_model.cols[index.column()].id
-        if col == "fix" and r.fixable:
+        if col == "preview":
+            self.preview.preview(r.track)
+        elif col == "fix" and r.fixable:
             self.ctrl.open_fix_route(r.entry.uid)
         elif r.is_slot and r.slot_active:
             self.ctrl.toggle_slot_view()
@@ -332,6 +354,8 @@ class MainWindow(QMainWindow):
         r = self._row_at(self.set_view, index)
         menu = QMenu(self)
         route = self.ctrl.model.route
+        if r and r.track:
+            menu.addAction("Preview", lambda: self.preview.preview(r.track))
         if r and r.entry and r.entry.is_real:
             menu.addAction("Remove from set", self._delete_selected)
             if r.track:
@@ -351,7 +375,10 @@ class MainWindow(QMainWindow):
         self.pool_toggle.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
 
     def _pool_clicked(self, index) -> None:
-        if self.pool_model.cols[index.column()].id == "menu":
+        col = self.pool_model.cols[index.column()].id
+        if col == "preview":
+            self.preview.preview(self._row_at(self.pool_view, index).track)
+        elif col == "menu":
             rect = self.pool_view.visualRect(index)
             self._pool_menu(index, self.pool_view.viewport().mapToGlobal(rect.bottomLeft()))
 
@@ -363,6 +390,7 @@ class MainWindow(QMainWindow):
         route = self.ctrl.model.route
         menu = QMenu(self)
         if r.track:
+            menu.addAction("Preview", lambda: self.preview.preview(r.track))
             menu.addAction("Suggest where to place it", lambda: self._placements(uid))
             menu.addAction("Show me how to get here", lambda: self._route_to(uid))
         if route and route.kind == POOL_ROUTE and route.target_uid == uid:
@@ -417,11 +445,29 @@ class MainWindow(QMainWindow):
             return
         ids = [r.track.id for r in rows]
         menu = QMenu(self)
+        menu.addAction("Preview", lambda: self.preview.preview(rows[0].track))
         if self.ctrl.slot_view:
             menu.addAction("Fill this transition", lambda: self.ctrl.fill_active(ids[:1]))
         menu.addAction("Add to set", lambda: self.ctrl.append_tracks(ids))
         menu.addAction("Add to To be added", lambda: self.ctrl.add_to_pool(ids))
         menu.exec(self.track_view.viewport().mapToGlobal(pos))
+
+    def _track_clicked(self, index) -> None:
+        if self.track_model.cols[index.column()].id == "preview":
+            r = self._row_at(self.track_view, index)
+            if r:
+                self.preview.preview(r.track)
+
+    def _preview_current(self, view) -> None:
+        r = self._row_at(view, view.currentIndex())
+        if r and r.track:
+            self.preview.preview(r.track)
+        else:
+            self.preview.toggle()
+
+    def _playing_changed(self, track_id) -> None:
+        for m in (self.set_model, self.pool_model, self.track_model):
+            m.set_playing(track_id)
 
     def _hide_toggled(self, on: bool) -> None:
         self.ctrl.set_hide_in_set(on)
@@ -527,6 +573,7 @@ class MainWindow(QMainWindow):
             "pool_cols": self.pool_view.state(),
             "track_cols": self.track_view.state(),
             "pool_open": self.pool_toggle.isChecked(),
+            "preview_volume": self.preview.volume.value() / 100,
         })
         self.ctrl.config.save()
 

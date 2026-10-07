@@ -121,3 +121,40 @@ def test_graph_points_and_hide_in_set(win):
     assert win.proxy.rowCount() == 3
     pts = win.ctrl.set_rows()[1]
     assert [p.y for p in pts] == [5, 6]
+
+
+def _silent_wav(path, seconds=3):
+    import wave
+
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b"\0\0" * 8000 * seconds)
+
+
+def test_preview_plays_and_toggles(win, qtbot, tmp_path):
+    wav = tmp_path / "song.wav"
+    _silent_wav(wav)
+    t = win.ctrl.library.get(3)
+    t.location = str(wav)
+    win.preview.volume.setValue(0)
+    win.ctrl.viewChanged.emit()
+    col = win.track_model.col_index("preview")
+    row = next(i for i in range(win.proxy.rowCount())
+               if win.proxy.index(i, 0).data(Qt.UserRole + 1).track.id == 3)
+    win._track_clicked(win.proxy.index(row, col))
+    qtbot.waitUntil(lambda: win.preview.playing_id == 3, timeout=5000)
+    assert win.track_model.playing_id == 3
+    assert win.proxy.index(row, col).data() == "⏸"
+    assert "T3 9A" in win.preview.title.text()
+    win._track_clicked(win.proxy.index(row, col))  # same track again: pause
+    qtbot.waitUntil(lambda: win.preview.playing_id is None, timeout=3000)
+    assert win.proxy.index(row, col).data() == "▶"
+
+
+def test_preview_missing_file_reports(win, qtbot):
+    with qtbot.waitSignal(win.preview.message) as sig:
+        win.preview.preview(win.ctrl.library.get(1))
+    assert "file not found" in sig.args[0]
+    assert win.preview.playing_id is None

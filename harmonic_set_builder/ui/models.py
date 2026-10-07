@@ -35,6 +35,7 @@ class RowModel(QAbstractTableModel):
         self.cols = [C.COL_BY_ID[c] for c in col_ids]
         self.rows: list[C.Row] = []
         self.notation = "camelot"
+        self.playing_id: Optional[int] = None  # track being previewed
         self.on_drop: Optional[Callable[[dict, int], None]] = None
 
     # --- data
@@ -66,6 +67,8 @@ class RowModel(QAbstractTableModel):
         r = self.rows[index.row()]
         col = self.cols[index.column()]
         if role == Qt.DisplayRole:
+            if col.id == "preview" and r.track and r.track.id == self.playing_id:
+                return "⏸"
             v = col.display(r, self.notation)
             return "" if v is None else str(v)
         if role == C.SORT_ROLE:
@@ -86,7 +89,7 @@ class RowModel(QAbstractTableModel):
         if role == Qt.DecorationRole and col.id == "color":
             return C.color_swatch(r)
         if role == Qt.TextAlignmentRole:
-            if col.id in ("fix", "menu", "want", "in_set"):
+            if col.id in ("fix", "menu", "want", "in_set", "preview"):
                 return int(Qt.AlignCenter)
             if col.align_right:
                 return int(Qt.AlignRight | Qt.AlignVCenter)
@@ -104,6 +107,12 @@ class RowModel(QAbstractTableModel):
         if self.on_drop:
             f |= Qt.ItemIsDropEnabled
         return f
+
+    def set_playing(self, track_id: Optional[int]) -> None:
+        self.playing_id = track_id
+        c = self.col_index("preview")
+        if c >= 0 and self.rows:
+            self.dataChanged.emit(self.index(0, c), self.index(len(self.rows) - 1, c), [Qt.DisplayRole])
 
     # --- drag and drop
     def mimeTypes(self):

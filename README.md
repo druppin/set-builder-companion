@@ -37,6 +37,9 @@ Tests: `.venv/bin/pytest` (UI tests run offscreen).
   one to see its candidates; drop or double-click a track to fill it.
 - **Help me fix key mixing mistakes**: shows **＋** on red rows; click it to bridge the clash.
 - **Energy graph** (top): energy from Camelot moves, breaking at clashes; click a point to select the row.
+- **Preview** (bottom bar): click ▶ on any row, press Space in a table, or right-click → *Preview*.
+  Click the same track again to pause; click the seek bar to jump, or use −10s / +10s. Tracks on an
+  unmounted drive report "file not found". Uses Qt Multimedia (bundled with PySide6).
 
 Sets autosave (debounced 0.5 s, atomic, last 20 versions) to the app data directory
 (`~/.local/share/HarmonicSetBuilder/Harmonic Set Builder/sets` on Linux). Config is one JSON file in
@@ -84,4 +87,4 @@ Defaults from section 9 of the brief are used unless noted.
 - Undo uses whole-set snapshots per command (sets are small), so every mutation is undoable uniformly.
 - A route that becomes unreachable stays open showing only the target placeholder, with a hint of which
   rule to relax in the status bar.
-- Not in v1 (per the brief): audio preview, set-length target, "guess first" learning mode, live OSC link.
+- Not in v1 (per the brief): set-length target, "guess first" learning mode, live OSC link.
