@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, QItemSelectionModel, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QToolBar, QToolButton,
     QVBoxLayout, QWidget,
 )
@@ -19,6 +19,7 @@ from .controller import Controller
 from .graph import EnergyGraph
 from .models import RowModel, SortProxy, TrackProxy
 from .covers import CoverCache
+from .file_dialogs import open_file, save_file
 from .models import cover_tooltip
 from .preview import PreviewBar
 from .settings_dialog import SettingsDialog
@@ -624,7 +625,7 @@ class MainWindow(QMainWindow):
             self.ctrl.import_collection(dict(items)[label])
 
     def _import_m3u(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import playlist", str(Path.home()), "Playlists (*.m3u *.m3u8)")
+        path = open_file(self, "Import playlist", str(Path.home()), "Playlists (*.m3u *.m3u8)")
         if path:
             missing = self.ctrl.import_m3u(Path(path))
             if missing:
@@ -640,13 +641,13 @@ class MainWindow(QMainWindow):
                 return
         ext, filt = (".txt", "Text (*.txt)") if as_text else (".m3u8", "Playlist (*.m3u8)")
         default = str(Path.home() / f"{self.ctrl.model.name}{ext}")
-        path, _ = QFileDialog.getSaveFileName(self, "Export set", default, filt)
+        path = save_file(self, "Export set", default, filt, ext)
         if path:
             self.ctrl.export(Path(path), as_text)
 
     def _choose_db(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Choose mixxxdb.sqlite", str(Path.home()),
-                                              "Mixxx library (mixxxdb.sqlite);;SQLite (*.sqlite)")
+        path = open_file(self, "Choose mixxxdb.sqlite", str(Path.home()),
+                         "Mixxx library (mixxxdb.sqlite);;SQLite (*.sqlite)")
         if path:
             self.ctrl.refresh_library(path)
             self.ctrl.config.save()

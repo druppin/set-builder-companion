@@ -259,3 +259,16 @@ def test_pool_round_trip_through_the_ui(win, qtbot):
     assert win.pool_toggle.text() == "To be added (1)"
     win.ctrl.undo.undo()  # undoing the delete takes it back out again
     assert win.pool_toggle.text() == "To be added (0)" and set_ids(win) == [1, 3]
+
+
+def test_file_dialog_sidebar_lists_drives(qtbot, monkeypatch):
+    from pathlib import Path
+
+    from harmonic_set_builder.ui import file_dialogs
+
+    monkeypatch.setattr(file_dialogs, "mounted_drives", lambda: [Path("/run/media/me/USBSTICK")])
+    d = file_dialogs._dialog(None, "Export set", str(Path.home()), "Playlist (*.m3u8)", save=True)
+    qtbot.addWidget(d)
+    urls = [u.toString() for u in d.sidebarUrls()]
+    assert urls[0] == "file:" and urls[-1] == "file:///run/media/me/USBSTICK"
+    assert d.acceptMode() == d.AcceptMode.AcceptSave
