@@ -148,6 +148,7 @@ COLUMNS: list[Col] = [
     Col("fix", "", 26, lambda r, n: "＋" if r.fixable else "", tooltip="Bridge this key clash"),
     Col("menu", "", 26, lambda r, n: "⋯", tooltip="Actions"),
     Col("preview", "▶", 28, lambda r, n: "▶" if r.track else "", tooltip="Preview (Space)"),
+    Col("cover", "Art", 28, lambda r, n: "", tooltip="Cover art"),
     Col("artist", "Artist", 160, _t("artist", 0)),
     Col("title", "Title", 220, _t("title", 1)),
     Col("album", "Album", 150, _t("album")),
@@ -186,10 +187,10 @@ SET_COLUMNS = [c.id for c in COLUMNS if c.id != "menu"]
 POOL_COLUMNS = [c.id for c in COLUMNS if c.id not in ("pos", "fix")]
 
 DEFAULT_VISIBLE = {
-    "track": ["preview", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta", "tier", "half",
+    "track": ["preview", "cover", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta", "tier", "half",
               "in_set", "want", "genre", "duration", "rating"],
-    "set": ["fix", "preview", "pos", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta"],
-    "pool": ["menu", "preview", "artist", "title", "key", "bpm", "move", "bpm_delta"],
+    "set": ["fix", "preview", "cover", "pos", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta"],
+    "pool": ["menu", "preview", "cover", "artist", "title", "key", "bpm", "move", "bpm_delta"],
 }
 
 

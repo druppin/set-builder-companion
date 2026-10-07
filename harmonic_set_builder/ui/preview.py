@@ -61,6 +61,10 @@ class PreviewBar(QWidget):
         back.clicked.connect(lambda: self._skip(-SKIP_MS))
         fwd = QToolButton(text="+10s")
         fwd.clicked.connect(lambda: self._skip(SKIP_MS))
+        self.cover = QLabel()
+        self.cover.setFixedSize(44, 44)
+        self.cover.setAlignment(Qt.AlignCenter)
+        self.cover.setStyleSheet("background: #141414;")
         self.title = QLabel("Preview: pick a track and press ▶ or Space")
         self.title.setObjectName("hint")
         self.title.setMinimumWidth(220)
@@ -78,7 +82,7 @@ class PreviewBar(QWidget):
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(6, 2, 6, 2)
-        for w in (self.play_btn, self.stop_btn, back, fwd):
+        for w in (self.play_btn, self.stop_btn, back, fwd, self.cover):
             lay.addWidget(w)
         lay.addWidget(self.title)
         lay.addWidget(self.slider, 1)
@@ -111,6 +115,9 @@ class PreviewBar(QWidget):
         self.title.setToolTip(track.location)
         self.player.setSource(QUrl.fromLocalFile(track.location))
         self.player.play()
+
+    def set_cover(self, pixmap) -> None:
+        self.cover.setPixmap(pixmap) if pixmap is not None else self.cover.clear()
 
     def toggle(self) -> None:
         if not self.player.source().isValid():

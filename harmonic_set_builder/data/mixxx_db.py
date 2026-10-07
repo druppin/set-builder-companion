@@ -136,7 +136,7 @@ def load(snapshot_path: Path) -> Library:
         want = [
             "id", "artist", "title", "album", "album_artist", "genre", "composer", "grouping", "year",
             "tracknumber", "duration", "bpm", "key", "key_id", "rating", "timesplayed", "last_played_at",
-            "comment", "datetime_added", "bitrate", "filetype", "color",
+            "comment", "datetime_added", "bitrate", "filetype", "color", "coverart_type", "coverart_location",
         ]
         select = ", ".join(f"l.{c}" if c in cols else f"NULL AS {c}" for c in want)
         sql = (
@@ -156,6 +156,7 @@ def load(snapshot_path: Path) -> Library:
                 last_played_at=_s(r["last_played_at"]), comment=_s(r["comment"]),
                 datetime_added=_s(r["datetime_added"]), bitrate=int(r["bitrate"] or 0),
                 filetype=_s(r["filetype"]), color=r["color"], location=_s(r["path"]),
+                cover_type=int(r["coverart_type"] or 0), cover_location=_s(r["coverart_location"]),
             )
         # Crates have no order of their own: use Mixxx's default library sort (artist, title).
         for r in conn.execute("SELECT id, name FROM crates ORDER BY name COLLATE NOCASE"):

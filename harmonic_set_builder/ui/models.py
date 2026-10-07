@@ -1,10 +1,12 @@
 """Qt table models over ``Row`` lists, drag-and-drop payloads and the track proxy."""
 from __future__ import annotations
 
+import base64
 import json
 from typing import Callable, Optional
 
-from PySide6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, QSortFilterProxyModel, Qt
+from PySide6.QtCore import QAbstractTableModel, QBuffer, QByteArray, QIODevice, QMimeData, QModelIndex, \
+    QSortFilterProxyModel, Qt
 
 from . import columns as C
 
@@ -36,6 +38,7 @@ class RowModel(QAbstractTableModel):
         self.rows: list[C.Row] = []
         self.notation = "camelot"
         self.playing_id: Optional[int] = None  # track being previewed
+        self.covers = None  # CoverCache, set by the window
         self.on_drop: Optional[Callable[[dict, int], None]] = None
 
     # --- data
@@ -88,6 +91,11 @@ class RowModel(QAbstractTableModel):
             return C.tooltip(col, r)
         if role == Qt.DecorationRole and col.id == "color":
             return C.color_swatch(r)
+        if col.id == "cover" and self.covers is not None:
+            if role == Qt.DecorationRole:
+                return self.covers.pixmap(r.track, 20)
+            if role == Qt.ToolTipRole:
+                return cover_tooltip(self.covers, r.track)
         if role == Qt.TextAlignmentRole:
             if col.id in ("fix", "menu", "want", "in_set", "preview"):
                 return int(Qt.AlignCenter)
@@ -113,6 +121,14 @@ class RowModel(QAbstractTableModel):
         c = self.col_index("preview")
         if c >= 0 and self.rows:
             self.dataChanged.emit(self.index(0, c), self.index(len(self.rows) - 1, c), [Qt.DisplayRole])
+
+    def cover_loaded(self, track_id: int) -> None:
+        c = self.col_index("cover")
+        if c < 0:
+            return
+        for i, r in enumerate(self.rows):
+            if r.track and r.track.id == track_id:
+                self.dataChanged.emit(self.index(i, c), self.index(i, c), [Qt.DecorationRole])
 
     # --- drag and drop
     def mimeTypes(self):
@@ -144,6 +160,19 @@ class RowModel(QAbstractTableModel):
             row = parent.row() if parent.isValid() else len(self.rows)
         self.on_drop(payload, row)
         return False  # the controller rebuilds the rows; nothing for the view to remove
+
+
+def cover_tooltip(covers, track, size: int = 220) -> Optional[str]:
+    """Rich-text tooltip showing the cover larger (inline PNG)."""
+    pm = covers.pixmap(track, size) if track else None
+    if pm is None:
+        return "No cover art" if covers.images.get(getattr(track, "id", None), 0) is None else None
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.WriteOnly)
+    pm.save(buf, "PNG")
+    b64 = base64.b64encode(bytes(ba)).decode()
+    return f'<img src="data:image/png;base64,{b64}" width="{pm.width()}" height="{pm.height()}">'
 
 
 class TrackProxy(QSortFilterProxyModel):

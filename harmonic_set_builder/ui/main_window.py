@@ -18,6 +18,8 @@ from . import columns as C
 from .controller import Controller
 from .graph import EnergyGraph
 from .models import RowModel, TrackProxy
+from .covers import CoverCache
+from .models import cover_tooltip
 from .preview import PreviewBar
 from .settings_dialog import SettingsDialog
 from .sources import SourcesTree
@@ -31,6 +33,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Harmonic Set Builder")
         self.resize(1500, 900)
         self._building = False
+        self.covers = CoverCache(ctrl.data_dir / "covers", self)
 
         # ---- energy graph
         self.graph = EnergyGraph()
@@ -107,6 +110,8 @@ class MainWindow(QMainWindow):
         suggested.clicked.connect(lambda: self.track_view.sortByColumn(-1, Qt.AscendingOrder))
         self.ref_label = QLabel()
         self.ref_label.setObjectName("hint")
+        self.ref_cover = QLabel()
+        self.ref_cover.setFixedSize(36, 36)
         mid = QWidget()
         mv = QVBoxLayout(mid)
         mv.setContentsMargins(0, 0, 0, 0)
@@ -116,7 +121,11 @@ class MainWindow(QMainWindow):
         bar.addWidget(suggested)
         mv.addLayout(bar)
         mv.addWidget(self.banner)
-        mv.addWidget(self.ref_label)
+        ref_row = QHBoxLayout()
+        ref_row.setContentsMargins(4, 2, 4, 2)
+        ref_row.addWidget(self.ref_cover)
+        ref_row.addWidget(self.ref_label, 1)
+        mv.addLayout(ref_row)
         mv.addWidget(self.track_view)
 
         # ---- sources
@@ -138,6 +147,10 @@ class MainWindow(QMainWindow):
         self.preview = PreviewBar((ctrl.config.get("ui", {}) or {}).get("preview_volume", 0.8))
         self.preview.message.connect(lambda m: self.statusBar().showMessage(m, 10000))
         self.preview.playingChanged.connect(self._playing_changed)
+        for m in (self.set_model, self.pool_model, self.track_model):
+            m.covers = self.covers
+            self.covers.loaded.connect(m.cover_loaded)
+        self.covers.loaded.connect(self._cover_loaded)
         central = QWidget()
         cv = QVBoxLayout(central)
         cv.setContentsMargins(0, 0, 0, 0)
@@ -253,6 +266,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ refresh
     def _library_changed(self) -> None:
+        self.covers.clear_memory()
         lib = self.ctrl.library
         s = self.ctrl.settings
         focus = (self.ctrl.focus.kind, self.ctrl.focus.id) if self.ctrl.focus else None
@@ -299,6 +313,8 @@ class MainWindow(QMainWindow):
         self.banner.setVisible(bool(banner))
         self.banner.setText(banner)
         ref = self.ctrl.reference_track()
+        self._ref_track = ref
+        self._update_ref_cover()
         self.ref_label.setText(f"Compared with: {ref.artist} – {ref.title}" if ref else
                                "Add a track to the set to see how others mix with it.")
         self.pool_model.set_rows(self.ctrl.pool_rows())
@@ -465,7 +481,22 @@ class MainWindow(QMainWindow):
         else:
             self.preview.toggle()
 
+    def _update_ref_cover(self) -> None:
+        ref = getattr(self, "_ref_track", None)
+        pm = self.covers.pixmap(ref, 36)
+        self.ref_cover.setPixmap(pm) if pm else self.ref_cover.clear()
+        self.ref_cover.setToolTip(cover_tooltip(self.covers, ref) or "")
+
+    def _cover_loaded(self, track_id: int) -> None:
+        ref = getattr(self, "_ref_track", None)
+        if ref and ref.id == track_id:
+            self._update_ref_cover()
+        if self.preview.track and self.preview.track.id == track_id:
+            self.preview.set_cover(self.covers.pixmap(self.preview.track, 44))
+
     def _playing_changed(self, track_id) -> None:
+        if self.preview.track:
+            self.preview.set_cover(self.covers.pixmap(self.preview.track, 44))
         for m in (self.set_model, self.pool_model, self.track_model):
             m.set_playing(track_id)
 

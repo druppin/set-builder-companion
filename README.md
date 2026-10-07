@@ -40,6 +40,12 @@ Tests: `.venv/bin/pytest` (UI tests run offscreen).
 - **Preview** (bottom bar): click ▶ on any row, press Space in a table, or right-click → *Preview*.
   Click the same track again to pause; click the seek bar to jump, or use −10s / +10s. Tracks on an
   unmounted drive report "file not found". Uses Qt Multimedia (bundled with PySide6).
+- **Cover art**: the *Art* column shows each track's cover; hover it for a larger view. The preview bar
+  and the "Compared with" line show it too. Covers come from Mixxx's recorded cover file, art embedded in
+  the audio (MP3/ID3, FLAC, M4A) or a `cover`/`folder`/`front` image in the album folder. They load in the
+  background and are cached as small PNGs in the app data directory (`covers/`), so the drive isn't
+  re-read each launch. After mounting a drive, *Refresh library* (Ctrl+R) picks up covers that were missing.
+- **Sources**: clicking the Crates / Playlists headings folds them; the focused source stays highlighted.
 
 Sets autosave (debounced 0.5 s, atomic, last 20 versions) to the app data directory
 (`~/.local/share/HarmonicSetBuilder/Harmonic Set Builder/sets` on Linux). Config is one JSON file in

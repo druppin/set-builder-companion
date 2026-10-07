@@ -158,3 +158,31 @@ def test_preview_missing_file_reports(win, qtbot):
         win.preview.preview(win.ctrl.library.get(1))
     assert "file not found" in sig.args[0]
     assert win.preview.playing_id is None
+
+
+def test_sources_selection_survives_heading_click(qtbot):
+    from PySide6.QtTest import QTest
+
+    from harmonic_set_builder.data.mixxx_db import Collection
+    from harmonic_set_builder.ui.sources import SourcesTree
+
+    lib = Library()
+    lib.crates = [Collection("crate", 1, "House", []), Collection("crate", 2, "DnB", [])]
+    tree = SourcesTree()
+    qtbot.addWidget(tree)
+    tree.populate(lib, False, False, None)
+    tree.resize(300, 400)
+    tree.show()
+    crates = tree.topLevelItem(1)
+    house = crates.child(0)
+
+    def click(item):
+        QTest.mouseClick(tree.viewport(), Qt.LeftButton, pos=tree.visualItemRect(item).center())
+
+    with qtbot.waitSignal(tree.focused):
+        click(house)
+    click(crates)  # heading: folds, but House stays highlighted
+    assert not crates.isExpanded()
+    assert tree.selectedItems() == [house]
+    click(crates)
+    assert crates.isExpanded() and tree.selectedItems() == [house]

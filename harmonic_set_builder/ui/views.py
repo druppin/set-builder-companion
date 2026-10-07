@@ -1,7 +1,7 @@
 """Table views with a persisted column chooser and placeholder/duplicate styling."""
 from __future__ import annotations
 
-from PySide6.QtCore import QByteArray, QRect, Qt, Signal
+from PySide6.QtCore import QByteArray, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QPen
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QMenu, QStyledItemDelegate, QTableView
 
@@ -59,6 +59,7 @@ class RowTable(QTableView):
         self.setWordWrap(False)
         self.verticalHeader().hide()
         self.verticalHeader().setDefaultSectionSize(22)
+        self.setIconSize(QSize(20, 20))
         self.setShowGrid(False)
         h = self.horizontalHeader()
         h.setSectionsMovable(True)
@@ -102,7 +103,7 @@ class RowTable(QTableView):
         h = self.horizontalHeader()
         menu = QMenu(self)
         for i, c in enumerate(self.model_cols()):
-            label = {"fix": "Fix (+)", "menu": "Actions (⋯)", "preview": "Preview (▶)"}.get(c.id, c.header or c.id)
+            label = {"fix": "Fix (+)", "menu": "Actions (⋯)", "preview": "Preview (▶)", "cover": "Cover art"}.get(c.id, c.header or c.id)
             act = menu.addAction(label)
             act.setCheckable(True)
             act.setChecked(not h.isSectionHidden(i))
