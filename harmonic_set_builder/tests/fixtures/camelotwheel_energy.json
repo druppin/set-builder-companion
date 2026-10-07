@@ -1,0 +1,20 @@
+{
+  "source": "https://camelotwheel.org/ Interactive Set Builder, app.js?v=3 (getHarmonicMatches + getEnergyScore + renderEnergyChart), recorded 2026-10-07",
+  "site_scores": {
+    "same key": 0, "+1": 1, "-1": -1, "mode flip (relative)": 0, "diagonal ±1 + flip": 0,
+    "+2": 3, "-2": -3, "+7 wheel (site calls it 'Tritone Jump'; musically a semitone up)": 2,
+    "±3 same mode (parallel)": "±2 (this app: off-key clash)", "+4 same mode": "0 (this app: off-key clash)",
+    "A n -> B n-3 / B n -> A n+3 (compatible tone)": "0 (this app: off-key clash)",
+    "diagonals in all four directions (A n -> B n±1, B n -> A n±1)": 0
+  },
+  "note": "Site chart is cumulative from 0. Values below are the site's chart values for sequences whose moves exist in both models.",
+  "sequences": [
+    {"keys": ["8A", "9A", "10A"], "values": [0, 1, 2]},
+    {"keys": ["8A", "8B", "9B"], "values": [0, 0, 1]},
+    {"keys": ["8A", "3A"], "values": [0, 2]},
+    {"keys": ["8A", "10A", "8A"], "values": [0, 3, 0]},
+    {"keys": ["8A", "9B", "8B", "8A", "7A"], "values": [0, 0, -1, -1, -2]},
+    {"keys": ["5B", "5A", "4A", "6A", "1A"], "values": [0, 0, -1, 2, 4]},
+    {"keys": ["8A", "7B", "8A", "9A"], "values": [0, 0, 0, 1]}
+  ]
+}
