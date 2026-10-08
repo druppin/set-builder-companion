@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .labels import Section, summary
+from .labels import LABELS_TAG, Section, summary
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS track_analysis (
@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS track_analysis (
   bpm             REAL,
   first_downbeat  REAL,
   duration        REAL,
-  grid            TEXT
+  grid            TEXT,
+  phrase_offset   INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sections (
   track_path  TEXT REFERENCES track_analysis(track_path),
@@ -87,6 +88,7 @@ class TrackAnalysis:
     first_downbeat: Optional[float] = None
     duration: float = 0.0
     grid: str = ""  # where the beat grid came from: mixxx | allin1 | detected
+    phrase_offset: int = 0  # bar (0-7) where the 8-bar phrases start; 1 = one pickup bar
     sections: list[Section] = field(default_factory=list)
     bars: list[dict] = field(default_factory=list)  # {"bar", "start_sec", energy, rms, low, ...}
 
@@ -103,14 +105,14 @@ class TrackAnalysis:
 
     def to_dict(self) -> dict:
         d = {k: getattr(self, k) for k in ("track_path", "file_hash", "analyzer", "analyzed_at", "mixxx_track_id",
-                                             "bpm", "first_downbeat", "duration", "grid", "bars")}
+                                             "bpm", "first_downbeat", "duration", "grid", "phrase_offset", "bars")}
         d["sections"] = [s.to_dict() for s in self.sections]
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "TrackAnalysis":
         a = cls(**{k: d[k] for k in ("track_path", "file_hash", "analyzer") if k in d})
-        for k in ("analyzed_at", "mixxx_track_id", "bpm", "first_downbeat", "duration", "grid", "bars"):
+        for k in ("analyzed_at", "mixxx_track_id", "bpm", "first_downbeat", "duration", "grid", "phrase_offset", "bars"):
             if k in d:
                 setattr(a, k, d[k])
         a.sections = [Section.from_dict(s) for s in d.get("sections") or []]
@@ -131,6 +133,9 @@ class AnalysisStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path)
         self.conn.executescript(SCHEMA)
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(track_analysis)")}
+        if "phrase_offset" not in cols:  # databases from before phrase offsets
+            self.conn.execute("ALTER TABLE track_analysis ADD COLUMN phrase_offset INTEGER DEFAULT 0")
         self.conn.commit()
 
     def close(self) -> None:
@@ -142,9 +147,10 @@ class AnalysisStore:
         with self.conn:
             self._delete(a.track_path)
             self.conn.execute(
-                "INSERT INTO track_analysis VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO track_analysis (track_path, mixxx_track_id, file_hash, analyzer, analyzed_at, bpm, "
+                "first_downbeat, duration, grid, phrase_offset) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (a.track_path, a.mixxx_track_id, a.file_hash, a.analyzer, a.analyzed_at, a.bpm, a.first_downbeat,
-                 a.duration, a.grid),
+                 a.duration, a.grid, a.phrase_offset),
             )
             self.conn.executemany(
                 "INSERT INTO sections VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -166,12 +172,12 @@ class AnalysisStore:
 
     def get(self, path: str) -> Optional[TrackAnalysis]:
         r = self.conn.execute(
-            "SELECT track_path, file_hash, analyzer, analyzed_at, mixxx_track_id, bpm, first_downbeat, duration, grid "
-            "FROM track_analysis WHERE track_path = ?", (path,)).fetchone()
+            "SELECT track_path, file_hash, analyzer, analyzed_at, mixxx_track_id, bpm, first_downbeat, duration, grid, "
+            "phrase_offset FROM track_analysis WHERE track_path = ?", (path,)).fetchone()
         if not r:
             return None
         a = TrackAnalysis(*r[:3], analyzed_at=r[3], mixxx_track_id=r[4], bpm=r[5], first_downbeat=r[6],
-                          duration=r[7] or 0.0, grid=r[8] or "")
+                          duration=r[7] or 0.0, grid=r[8] or "", phrase_offset=r[9] or 0)
         a.sections = [
             Section(label=x[0], number=x[1], start_sec=x[2], end_sec=x[3], start_bar=x[4], end_bar=x[5],
                     mean_energy=x[6], source=x[7], repeated=bool(x[8]))
@@ -201,14 +207,26 @@ class AnalysisStore:
     def needs_analysis(self, path: str, backend: str, force: bool = False) -> bool:
         if force:
             return True
+        return self.status(path, backend) != "current"
+
+    def backend_of(self, path: str) -> Optional[str]:
+        """'builtin' or 'allin1': which analyzer made the stored result."""
+        r = self.conn.execute("SELECT analyzer FROM track_analysis WHERE track_path = ?", (path,)).fetchone()
+        return r[0].split("==")[0] if r else None
+
+    def status(self, path: str, backend: Optional[str] = None) -> str:
+        """missing | changed (file or backend differs) | outdated (older labeling rules) | current.
+        An unreachable file (drive not mounted) keeps its result: never "changed"."""
         r = self.conn.execute("SELECT file_hash, analyzer FROM track_analysis WHERE track_path = ?", (path,)).fetchone()
         if not r:
-            return True
+            return "missing"
         try:
-            sig = file_signature(path)
+            changed = r[0] != file_signature(path) or (backend is not None and not r[1].startswith(backend))
         except OSError:
-            return False  # file not reachable (drive unmounted): keep what we have
-        return r[0] != sig or not r[1].startswith(backend)
+            changed = False
+        if changed:
+            return "changed"
+        return "current" if r[1].endswith(LABELS_TAG) else "outdated"
 
     # ----------------------------------------------------------- raw cache
     def raw_get(self, path: str, backend: str, file_hash: str) -> Optional[dict]:

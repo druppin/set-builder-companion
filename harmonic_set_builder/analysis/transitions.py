@@ -53,7 +53,8 @@ def suggest(a: TrackAnalysis, b: TrackAnalysis) -> tuple[list[Tip], list[Flag]]:
     outro = last(a.sections, OUTRO)
     intro = first(b.sections, INTRO)
     b_next = _next_after(b.sections, intro) if intro else b.sections[0]
-    b_lead = intro.bars if intro else 0
+    # A pickup bar before B's first phrase belongs to the intro but not to its phrase count.
+    b_lead = intro.bars - (b.phrase_offset if intro and intro.start_bar == 0 else 0) if intro else 0
 
     if outro and intro:
         start = outro.end_bar - intro.bars
@@ -100,7 +101,7 @@ def suggest(a: TrackAnalysis, b: TrackAnalysis) -> tuple[list[Tip], list[Flag]]:
         flags.append(Flag(f"B's intro ({_bar_word(intro.bars)}) is shorter than A's outro ({_bar_word(outro.bars)}): "
                           "start B later in the outro, or the mix runs out of intro before A finishes."))
     off = []
-    if outro and outro.start_bar % PHRASE:
+    if outro and (outro.start_bar - a.phrase_offset) % PHRASE:
         off.append(f"A's outro starts at bar {outro.start_bar + 1}, off the {PHRASE}-bar phrase grid")
     if intro and b_lead % PHRASE:
         off.append(f"B's intro is {_bar_word(b_lead)}, not a multiple of {PHRASE}")

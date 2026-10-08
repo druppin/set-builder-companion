@@ -10,7 +10,7 @@ import numpy as np
 
 from . import audio, grid as grid_mod, structure
 from .energy import COMPONENTS, bar_features, beat_novelty, spectral
-from .labels import to_sections
+from .labels import LABELS_TAG, raw_phrase_offset, to_sections
 from .store import TrackAnalysis, file_signature
 from .structure import ALLIN1, BUILTIN, RawStructure
 
@@ -95,9 +95,9 @@ def analyze(job: Job) -> dict:
     sections = to_sections(raw, f, duration)
 
     a = TrackAnalysis(
-        track_path=job.path, file_hash=sig, analyzer=raw.analyzer, mixxx_track_id=job.track_id,
+        track_path=job.path, file_hash=sig, analyzer=raw.analyzer + LABELS_TAG, mixxx_track_id=job.track_id,
         bpm=round(float(bpm), 3), first_downbeat=round(float(bars[0]), 4), duration=round(duration, 3),
-        grid=grid_src, sections=sections,
+        grid=grid_src, sections=sections, phrase_offset=raw_phrase_offset(raw, f.starts),
         bars=[{"bar": i, "start_sec": round(float(f.starts[i]), 4), "energy": round(float(f.energy[i]), 4),
                **{k: round(float(getattr(f, k)[i]), 4) for k in COMPONENTS}} for i in range(len(f))],
     )

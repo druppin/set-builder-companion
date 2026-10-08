@@ -30,25 +30,32 @@ def executor(workers: int) -> ProcessPoolExecutor:
 def make_jobs(tracks: Iterable[Track], grids: dict[int, dict], store: AnalysisStore, backend: str,
               allin1_python: Optional[str] = None, force: bool = False, relabel: bool = False
               ) -> tuple[list[Job], list[tuple[Track, str]]]:
-    """Jobs for tracks that need (re-)analysis, plus (track, reason) for those skipped."""
+    """Jobs for tracks that need (re-)analysis, plus (track, reason) for those skipped.
+
+    * new or changed file: analyze with ``backend``
+    * older labeling rules, or ``relabel``: re-label from the cached output of the
+      backend that made the result (seconds; allin1 isn't re-run, and an allin1
+      result isn't replaced just because Built-in is selected)
+    * ``force``: analyze from scratch with ``backend``
+    """
     jobs, skipped = [], []
     for t in tracks:
         if not t.location or not os.path.isfile(t.location):
             skipped.append((t, "file not found (drive not mounted?)"))
             continue
-        if not relabel and not store.needs_analysis(t.location, backend, force):
-            skipped.append((t, "already analyzed"))
-            continue
-        raw = None
-        if relabel or not force:
-            try:
-                raw = store.raw_get(t.location, backend, file_signature(t.location))
-            except OSError:
-                raw = None
-        if relabel and raw is None and backend == ALLIN1:
-            skipped.append((t, "no cached allin1 output to relabel"))
-            continue
-        jobs.append(Job(t.location, t.id, t.bpm, grids.get(t.id), backend, allin1_python, raw))
+        status = store.status(t.location)
+        use, raw = backend, None
+        if not force:
+            if status == "current" and not relabel:
+                skipped.append((t, "already analyzed"))
+                continue
+            if status in ("current", "outdated"):
+                use = store.backend_of(t.location) or backend
+            raw = store.raw_get(t.location, use, file_signature(t.location))
+            if raw is None and use == ALLIN1 and status in ("current", "outdated"):
+                skipped.append((t, "no cached allin1 output to re-label (re-analyze from scratch instead)"))
+                continue
+        jobs.append(Job(t.location, t.id, t.bpm, grids.get(t.id), use, allin1_python, raw))
     return jobs, skipped
 
 

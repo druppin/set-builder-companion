@@ -35,7 +35,7 @@ SECTION_COLORS = {
 COLS = ["#", "Artist", "Title", "Genre", "BPM", "Key", "Duration", "Structure", "Status"]
 C_POS, C_STRUCT, C_STATUS = 0, 7, 8
 STATUS_FILTERS = (("all", "All tracks"), ("new", "Not analyzed"), ("analyzed", "Analyzed"),
-                  ("changed", "File changed"), ("failed", "Failed"))
+                  ("changed", "Changed / outdated"), ("failed", "Failed"))
 PATH_ROLE = Qt.UserRole + 1
 SORT_ROLE = Qt.UserRole + 2
 
@@ -61,7 +61,7 @@ class TrackFilter(QSortFilterProxyModel):
     def filterAcceptsRow(self, row, parent) -> bool:
         if self.status != "all":
             st = self.sourceModel().index(row, C_STATUS, parent).data() or ""
-            ok = {"new": st in ("", "queued"), "analyzed": st == "analyzed", "changed": st == "file changed",
+            ok = {"new": st in ("", "queued"), "analyzed": st == "analyzed", "changed": st in ("file changed", "outdated labels"),
                   "failed": st.startswith("failed")}[self.status]
             if not ok:
                 return False
@@ -494,8 +494,9 @@ class PhrasesView(QWidget):
         for i, t in enumerate(self.tracks):
             row = index.get(t.location)
             st = self.status.get(t.location) or ("analyzed" if row else "")
-            if row and self.store.needs_analysis(t.location, row.analyzer.split("==")[0]) and not self.status.get(t.location):
-                st = "file changed"
+            if row and not self.status.get(t.location):
+                st = {"changed": "file changed", "outdated": "outdated labels"}.get(
+                    self.store.status(t.location, row.analyzer.split("==")[0]), st)
             dur = f"{int(t.duration // 60)}:{int(t.duration % 60):02d}" if t.duration else ""
             vals = [str(i + 1) if is_set else "", t.artist, t.title, t.genre, f"{t.bpm:.1f}" if t.bpm else "?",
                     format_key(t.key, notation), dur, row.summary if row else "", st]
@@ -521,7 +522,9 @@ class PhrasesView(QWidget):
 
     def _style_status(self, it: QStandardItem, st: str) -> None:
         colors = {"analyzed": theme.BAND_COLORS["safe"], "analyzing…": theme.ACCENT, "queued": theme.DIM,
-                  "file changed": theme.BAND_COLORS["caution"]}
+                  "file changed": theme.BAND_COLORS["caution"], "outdated labels": theme.BAND_COLORS["caution"]}
+        if st == "outdated labels":
+            it.setToolTip("Labeled by older rules: “Analyze all new” re-labels it in seconds from the saved model output")
         if st.startswith("failed"):
             it.setForeground(theme.CLASH)
             it.setToolTip(st)
@@ -665,7 +668,8 @@ class PhrasesView(QWidget):
         m = QMenu(self)
         m.addAction("Preview", lambda: self.preview.preview(tracks[0]))
         m.addAction("Analyze", lambda: self.analyze(tracks))
-        m.addAction("Re-analyze (even if unchanged)", lambda: self.analyze(tracks, force=True))
+        m.addAction("Re-label (fast: reuses the saved model output)", lambda: self.analyze(tracks, relabel=True))
+        m.addAction(f"Re-analyze from scratch ({self.backend.currentText()})", lambda: self.analyze(tracks, force=True))
         analyzed = [t for t in tracks if self.store.get(t.location)]
         if analyzed:
             m.addAction("Forget analysis", lambda: self._forget(analyzed))
@@ -688,14 +692,14 @@ class PhrasesView(QWidget):
     def allin1_python(self) -> str:
         return self.ctrl.settings.allin1_python or str(default_allin1_python(self.ctrl.data_dir))
 
-    def analyze(self, tracks: list[Track], force: bool = False) -> None:
+    def analyze(self, tracks: list[Track], force: bool = False, relabel: bool = False) -> None:
         if self.runner.running:
             QMessageBox.information(self, "Analysis running", "Wait for the current analysis to finish, or press Stop.")
             return
         if not tracks:
             return
         backend = self.backend.currentData()
-        if backend == ALLIN1:
+        if backend == ALLIN1 and not relabel:
             ok, msg = allin1_available(self.allin1_python())
             if not ok:
                 QMessageBox.warning(self, "allin1 not available",
@@ -710,7 +714,7 @@ class PhrasesView(QWidget):
                 return
         grids = mixxx_db.load_grids(self.ctrl.snapshot_path, [t.id for t in tracks]) \
             if self.ctrl.snapshot_path.is_file() else {}
-        jobs, skipped = batch.make_jobs(tracks, grids, self.store, backend, self.allin1_python(), force)
+        jobs, skipped = batch.make_jobs(tracks, grids, self.store, backend, self.allin1_python(), force, relabel)
         missing = [t for t, why in skipped if why.startswith("file not found")]
         if not jobs:
             msg = "Everything listed is already analyzed." if not missing else \

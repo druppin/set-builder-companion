@@ -224,11 +224,20 @@ Defaults from section 9 of the brief are used unless noted.
   found the boundaries but called the first half "intro", so *intro* only counts for a leading run that ends at
   the first drop-level section, and *outro* only after the last drop; elsewhere energy and the kick decide.
   A quiet section that ends the track after its last drop is the Outro even without a kick.
-- Build-ups need two of the three rises (onsets, highs, brightness) rather than all three, a falling or absent
-  low end, a step up where the build starts, and a jump in energy *or* low end at the drop (a riser can be as
-  loud as the drop). An Intro is never relabeled as a Build as a whole.
+- Neither analyzer labels build-ups, so they're derived. First choice: the 4–16-bar section right before a drop
+  (its boundary comes from allin1 or the built-in novelty), if it's clearly quieter than the drop and something
+  rises in it (onsets, highs or brightness). At the very start of a track it must also lose the kick/bass, so a
+  kick intro that adds hats isn't mistaken for a build. Otherwise a build is looked for in the last 16/8/4 bars
+  before the drop: two of the three rises, a falling or absent low end, a change where it starts (something comes
+  in *or* the kick drops out), and a jump in energy or low end at the drop.
 - Sections shorter than 4 bars (except builds) merge into a neighbour.
-- Boundaries snap to the nearest downbeat, then onto the 8-bar grid when within 1 bar (spec §3.5).
+- Boundaries snap to the nearest downbeat, then onto the 8-bar grid when within 1 bar (spec §3.5). The grid
+  starts where the track's phrases do: a pickup bar before the first phrase (e.g. AC Slater – *Bass Face*) puts
+  every phrase one bar after Mixxx's first downbeat, found from where the section changes fall.
+- Results record the labeling-rules version. When the rules change, *Analyze all new* re-labels older results
+  from the saved model output in seconds (shown as *outdated labels*); allin1 isn't re-run, and an allin1 result
+  isn't replaced just because Built-in is selected. Right-click → *Re-label* does it on demand, *Re-analyze from
+  scratch* re-runs the selected analyzer.
 - "Nothing runs while Mixxx is open": cue export refuses outright; analysis asks (GUI) or needs
   `--allow-while-mixxx-runs` (CLI), and always runs at nice 10.
 - Hot cue colors come from Mixxx's default palette: Intro green, Build yellow, Drop red, Breakdown blue,

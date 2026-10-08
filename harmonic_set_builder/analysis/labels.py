@@ -11,12 +11,16 @@ from typing import Optional
 
 import numpy as np
 
-from .energy import BarFeatures, detect_build, kick_present
+from .energy import BarFeatures, build_signs, detect_build, kick_present
 from .structure import RawStructure
 
 INTRO, BUILD, DROP, BREAKDOWN, GROOVE, OUTRO = "Intro", "Build", "Drop", "Breakdown", "Groove", "Outro"
 DJ_LABELS = (INTRO, BUILD, DROP, BREAKDOWN, GROOVE, OUTRO)
 MODEL, DERIVED, MANUAL = "model", "derived", "manual"
+# Bump when the labeling rules change: older results get re-labeled from the cached
+# model output (fast; allin1 isn't re-run).
+LABELS_VERSION = 2
+LABELS_TAG = f"+labels{LABELS_VERSION}"
 
 DROP_ENERGY = 0.55  # chorus at or above this mean energy is a Drop
 BODY_DROP_ENERGY = 0.7  # verse/inst/solo this energetic with the kick in is a Drop too
@@ -55,27 +59,53 @@ class Section:
         return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
 
 
-def snap_bar(t: float, bars: np.ndarray) -> int:
-    """Nearest downbeat, then onto the 8-bar phrase grid if that's within a bar."""
-    b = int(np.argmin(np.abs(bars - t)))
-    p = int(round(b / PHRASE)) * PHRASE
-    return p if abs(p - b) <= SNAP_BARS else b
+def nearest_bar(t: float, bars: np.ndarray) -> int:
+    return int(np.argmin(np.abs(bars - t)))
+
+
+def phrase_offset(boundaries: list[int]) -> int:
+    """Bar (0–7) on which the track's 8-bar phrases start, judged by where its
+    sections change. Often 0, but a pickup bar before the first phrase makes it 1.
+    Needs more votes than bar 0 to move off it."""
+    pts = [b for b in boundaries if b > 0]
+    votes = [sum(1 for b in pts if (b - o) % PHRASE == 0) for o in range(PHRASE)]
+    best = max(range(PHRASE), key=lambda o: votes[o])
+    return best if votes[best] >= 2 and votes[best] > votes[0] else 0
+
+
+def snap_bar(t: float, bars: np.ndarray, offset: int = 0) -> int:
+    """Nearest downbeat, then onto the track's 8-bar phrase grid if that's within a bar."""
+    b = nearest_bar(t, bars)
+    p = int(round((b - offset) / PHRASE)) * PHRASE + offset
+    return p if abs(p - b) <= SNAP_BARS and 0 <= p < len(bars) else b
+
+
+def _segments(raw: RawStructure) -> list[dict]:
+    """Segments with allin1's 'start'/'end' silence merged into its neighbour."""
+    segs = sorted(raw.segments, key=lambda s: s["start"])
+    out = []
+    for i, s in enumerate(segs):
+        if s["label"] == "start" and i + 1 < len(segs):
+            continue  # the next segment starts at 0 instead
+        if s["label"] == "end" and out:
+            continue  # absorbed by the previous segment
+        out.append(s)
+    return out
+
+
+def raw_phrase_offset(raw: RawStructure, bars: np.ndarray) -> int:
+    return phrase_offset([nearest_bar(s["start"], bars) for s in _segments(raw)[1:]])
 
 
 def _raw_bounds(raw: RawStructure, bars: np.ndarray) -> list[tuple[int, str]]:
-    """(start bar, raw label) per segment; 'start'/'end' silence merges into its neighbour."""
-    segs = sorted(raw.segments, key=lambda s: s["start"])
+    """(start bar, raw label) per segment, snapped to the track's phrase grid."""
+    offset = raw_phrase_offset(raw, bars)
     out: list[tuple[int, str]] = []
-    for i, s in enumerate(segs):
-        label = s["label"]
-        if label == "start" and i + 1 < len(segs):
-            continue  # the next segment starts at 0 instead
-        if label == "end" and out:
-            continue  # absorbed by the previous segment
-        b = 0 if not out else snap_bar(s["start"], bars)
+    for s in _segments(raw):
+        b = 0 if not out else snap_bar(s["start"], bars, offset)
         if out and b <= out[-1][0]:
             continue
-        out.append((b, label))
+        out.append((b, s["label"]))
     return out
 
 
@@ -141,6 +171,22 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
                 labels[i] = OUTRO
             else:
                 break
+
+    # A short, quieter section right before a drop that shows build signs is the build.
+    # (Neither analyzer labels builds; the boundary in front of the drop is the clue.)
+    for i in range(len(spans) - 1):
+        a, b, _ = spans[i]
+        if labels[i + 1] != DROP or labels[i] in (DROP, BUILD) or not 4 <= b - a <= 16:
+            continue
+        drop_e = float(f.energy[b:spans[i + 1][1]].mean())
+        if seg_e[i] > drop_e - 0.25:
+            continue
+        signs = build_signs(f, a, b)
+        rising = signs["onsets"] or signs["high"] or signs["centroid"]
+        # Something must rise (a flat kickless stretch is a breakdown). At the very
+        # start, a kick intro adding hats rises too, so there the kick/bass must also drop out.
+        if rising and (i > 0 or signs["low_out"]):
+            labels[i], sources[i] = BUILD, DERIVED
 
     # Merge neighbours with the same label, find builds, then merge again.
     runs = _merge([(a, b, labels[i], sources[i]) for i, (a, b, _) in enumerate(spans)])

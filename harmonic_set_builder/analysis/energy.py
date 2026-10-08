@@ -175,16 +175,26 @@ def detect_build(f: BarFeatures, boundary: int, seg_start: int) -> Optional[int]
         win = slice(a, boundary)
         rising = sum(_rising(x[win]) for x in (f.onsets, f.high, f.centroid))
         low_ok = _slope(f.low[win]) <= 0.005 or kick[win].mean() < 0.5
-        if rising >= 2 and low_ok and (a == seg_start or _step_up(f, a)):
+        if rising >= 2 and low_ok and (a == seg_start or _step_change(f, a)):
             return a
     return None
 
 
-def _step_up(f: BarFeatures, a: int) -> bool:
-    """Something enters at bar ``a``: high band or onsets jump versus the two bars before."""
+def _step_change(f: BarFeatures, a: int) -> bool:
+    """Something changes at bar ``a``: highs or onsets jump in, or the kick/bass drops out."""
     if a < 2:
         return True
     for x in (f.high, f.onsets):
         if x[a:a + 2].mean() > x[a - 2:a].mean() + 0.1:
             return True
-    return False
+    return f.low[a:a + 2].mean() < f.low[a - 2:a].mean() - 0.2
+
+
+def build_signs(f: BarFeatures, a: int, b: int) -> dict[str, bool]:
+    """Evidence that bars [a, b) build toward what follows."""
+    win = slice(a, b)
+    kick = kick_present(f)
+    low_out = bool(_slope(f.low[win]) < -0.01 or (kick[win].mean() < 0.5 and (a == 0 or kick[max(0, a - 4):a].mean() > 0.5))
+                   or (a > 0 and f.low[a:b].min() < f.low[max(0, a - 2):a].mean() - 0.3))
+    return {"onsets": _rising(f.onsets[win]), "high": _rising(f.high[win]), "centroid": _rising(f.centroid[win]),
+            "low_out": low_out}

@@ -153,7 +153,7 @@ def test_cached_raw_relabels_without_rerunning_the_model(edm_file, monkeypatch):
     first_run = pipeline.analyze(pipeline.Job(str(edm_file), bpm=edm.BPM, backend="allin1", raw={
         "analyzer": "allin1==1.1.0", "beats": [], "downbeats": [],
         "segments": [{"start": 0, "end": 30, "label": "intro"}, {"start": 30, "end": 180, "label": "chorus"}]}))
-    assert first_run["analysis"]["analyzer"] == "allin1==1.1.0"
+    assert first_run["analysis"]["analyzer"] == "allin1==1.1.0" + labels.LABELS_TAG
 
     def boom(*a, **k):
         raise AssertionError("must not run allin1")
@@ -196,7 +196,7 @@ def test_needs_analysis_on_file_change(tmp_path):
     st = AnalysisStore(tmp_path / "a.sqlite")
     assert st.needs_analysis(str(f), "builtin")
     a = _analysis(str(f), [(DROP, 0, 64)])
-    a.file_hash = file_signature(str(f))
+    a.file_hash, a.analyzer = file_signature(str(f)), "builtin==1" + labels.LABELS_TAG
     st.save(a)
     assert not st.needs_analysis(str(f), "builtin")
     assert st.needs_analysis(str(f), "allin1")  # different backend
@@ -240,3 +240,74 @@ def test_set_flow_overlaps_at_the_mix_point():
     assert flow[0].mix_in == pytest.approx((64 - 16) * 2.0)
     flow = transitions.set_flow([a, b])
     assert flow[1].offset == pytest.approx(48 * 2.0) and flow[1].times[0] == pytest.approx(96.0)
+
+
+# ------------------------------------------- real tracks (bar features only)
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+REAL = json.loads((Path(__file__).parent / "fixtures" / "real_tracks.json").read_text())
+
+
+def _real(name):
+    """Stored per-bar features plus allin1's raw output for a track from the library
+    (2026-10-08). No audio: kick presence comes from the normalized low band."""
+    d = REAL[name]
+    b = {k: np.asarray(v, dtype=float) for k, v in d["bars"].items()}
+    n = len(b["energy"])
+    f = BarFeatures(b["start_sec"], np.append(b["start_sec"][1:], d["duration"]), b["rms"], b["low"], b["high"],
+                    b["centroid"], b["onsets"], b["energy"], np.zeros((n, 25)), b["low"] * 30 - 40)
+    raw = structure.RawStructure("allin1==1.1.0", segments=d["allin1_segments"])
+    return labels.to_sections(raw, f, d["duration"]), raw, f
+
+
+def test_phrase_grid_offset_from_a_pickup_bar():
+    # AC Slater – Bass Face: phrases start one bar after Mixxx's first downbeat.
+    secs, raw, f = _real("bass_face")
+    assert labels.raw_phrase_offset(raw, f.starts) == 1
+    drops = [s for s in secs if s.label == DROP]
+    assert [round(s.start_sec, 1) for s in drops] == [32.4, 122.4]  # on allin1's boundaries, not a bar early
+    assert all((s.start_bar - 1) % 8 == 0 for s in secs[1:])
+
+
+def test_builds_before_drops_on_real_tracks():
+    secs, _, _ = _real("bass_face")
+    names = [s.label for s in secs]
+    assert names.count(BUILD) == 2  # Build 2 used to be missed
+    b2 = [s for s in secs if s.label == BUILD][1]
+    assert b2.end_bar == next(s for s in secs if s.name == "Drop 2").start_bar
+
+    secs, _, _ = _real("do_it_to_it")
+    # ACRAZE – Do It To It (Tiësto Remix) opens on a build, and its second build is 8 bars, not 4.
+    assert secs[0].label == BUILD and secs[0].bars == 8
+    b2 = [s for s in secs if s.label == BUILD][1]
+    assert (round(b2.start_sec, 1), b2.bars) == (62.9, 8)
+
+
+def test_phrase_offset_needs_evidence():
+    assert labels.phrase_offset([9, 17, 41, 65]) == 1
+    assert labels.phrase_offset([8, 17]) == 0  # a tie stays on the downbeat grid
+    assert labels.phrase_offset([13]) == 0
+
+
+def test_status_and_relabel_keep_the_original_backend(tmp_path):
+    from harmonic_set_builder.analysis import batch
+    from harmonic_set_builder.core.track import Track
+
+    f = tmp_path / "t.mp3"
+    f.write_bytes(b"x")
+    st = AnalysisStore(tmp_path / "a.sqlite")
+    a = _analysis(str(f), [(DROP, 0, 64)])
+    a.file_hash, a.analyzer = file_signature(str(f)), "allin1==1.1.0"  # made by older labeling rules
+    st.save(a)
+    st.raw_put(str(f), "allin1", a.file_hash, {"analyzer": "allin1==1.1.0", "segments": []})
+    assert st.status(str(f)) == "outdated" and st.backend_of(str(f)) == "allin1"
+    jobs, _ = batch.make_jobs([Track(1, location=str(f))], {}, st, "builtin")
+    assert len(jobs) == 1 and jobs[0].backend == "allin1" and jobs[0].raw is not None  # re-label, not re-run
+    a.analyzer += labels.LABELS_TAG
+    st.save(a)
+    assert st.status(str(f)) == "current"
+    jobs, skipped = batch.make_jobs([Track(1, location=str(f))], {}, st, "builtin")
+    assert not jobs and skipped[0][1] == "already analyzed"
+    jobs, _ = batch.make_jobs([Track(1, location=str(f))], {}, st, "builtin", force=True)
+    assert jobs[0].backend == "builtin" and jobs[0].raw is None

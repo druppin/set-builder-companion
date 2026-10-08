@@ -75,7 +75,11 @@ def pick_boundaries(score: np.ndarray, min_gap: int = 4) -> list[int]:
     n = len(score)
     if n < 2 * min_gap:
         return []
-    bonus = np.array([0.15 if b % 8 == 0 else 0.05 if b % 4 == 0 else 0.0 for b in range(n)])
+    # The phrase grid may start a bar or more after the first downbeat (pickup bars):
+    # put the bonus where the strongest changes line up.
+    sums = [score[o::8].sum() for o in range(8)]
+    off = int(np.argmax(sums)) if max(sums) > 1.2 * sums[0] else 0
+    bonus = np.array([0.15 if (b - off) % 8 == 0 else 0.05 if (b - off) % 4 == 0 else 0.0 for b in range(n)])
     s = score + bonus * (score > 0.05)
     thresh = np.median(s) + 0.5 * s.std()
     cands = [b for b in range(min_gap, n - min_gap // 2)
