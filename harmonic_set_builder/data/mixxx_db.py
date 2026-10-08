@@ -137,6 +137,7 @@ def load(snapshot_path: Path) -> Library:
             "id", "artist", "title", "album", "album_artist", "genre", "composer", "grouping", "year",
             "tracknumber", "duration", "bpm", "key", "key_id", "rating", "timesplayed", "last_played_at",
             "comment", "datetime_added", "bitrate", "filetype", "color", "coverart_type", "coverart_location",
+            "samplerate",
         ]
         select = ", ".join(f"l.{c}" if c in cols else f"NULL AS {c}" for c in want)
         sql = (
@@ -157,6 +158,7 @@ def load(snapshot_path: Path) -> Library:
                 datetime_added=_s(r["datetime_added"]), bitrate=int(r["bitrate"] or 0),
                 filetype=_s(r["filetype"]), color=r["color"], location=_s(r["path"]),
                 cover_type=int(r["coverart_type"] or 0), cover_location=_s(r["coverart_location"]),
+                samplerate=int(r["samplerate"] or 0),
             )
         # Crates have no order of their own: use Mixxx's default library sort (artist, title).
         for r in conn.execute("SELECT id, name FROM crates ORDER BY name COLLATE NOCASE"):
@@ -182,6 +184,29 @@ def load(snapshot_path: Path) -> Library:
     lib._index()
     lib.snapshot_time = datetime.now()
     return lib
+
+
+def load_grids(snapshot_path: Path, track_ids) -> dict[int, dict]:
+    """Mixxx beat grids (decoded, in seconds) for these tracks, from the snapshot."""
+    from ..analysis.grid import decode_mixxx_beats
+
+    ids = list(track_ids)
+    out: dict[int, dict] = {}
+    conn = sqlite3.connect(snapshot_path)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(library)")}
+        if not {"beats", "beats_version", "samplerate"} <= cols:
+            return out
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ("SELECT id, beats, beats_version, samplerate FROM library WHERE id IN (" + ",".join("?" * len(chunk)) + ")")
+            for tid, blob, ver, sr in conn.execute(q, chunk):
+                g = decode_mixxx_beats(blob, ver, int(sr or 0))
+                if g:
+                    out[tid] = g.to_dict()
+    finally:
+        conn.close()
+    return out
 
 
 def visible_playlists(lib: Library, show_history: bool, show_autodj: bool) -> list[Collection]:

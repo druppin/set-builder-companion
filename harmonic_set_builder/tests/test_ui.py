@@ -272,3 +272,105 @@ def test_file_dialog_sidebar_lists_drives(qtbot, monkeypatch):
     urls = [u.toString() for u in d.sidebarUrls()]
     assert urls[0] == "file:" and urls[-1] == "file:///run/media/me/USBSTICK"
     assert d.acceptMode() == d.AcceptMode.AcceptSave
+
+
+# ------------------------------------------------------------ Phrases / Learn
+def test_switch_views_keeps_the_preview_bar(win):
+    assert [a.text() for a in win.view_actions] == ["Set Builder", "Phrases", "Learn"]
+    win.view_actions[2].trigger()
+    assert win.stack.currentWidget() is win.learn and win.preview.isVisibleTo(win)
+    win.show_view(1)
+    assert win.stack.currentWidget() is win.phrases
+    win.save_layout()
+    assert win.ctrl.config.get("ui")["view"] == 1
+
+
+def test_learn_explore_explains_a_move(win):
+    from harmonic_set_builder.core.camelot import Key
+
+    lv = win.learn
+    lv.tabs.setCurrentIndex(0)
+    lv._wheel_clicked(Key(8, "A"))
+    lv._wheel_clicked(Key(9, "A"))
+    html = lv.explain_box.toHtml()
+    assert "+1" in html and "6 of 7 notes" in html and "F→F#" in html
+    assert lv.hear_move.isEnabled()
+    assert lv.moves_table.rowCount() == 6  # strict fixture: only the six smooth moves from 8A
+    assert lv.wheel.from_key == Key(8, "A") and lv.wheel.to_key == Key(9, "A")
+
+
+def test_learn_quiz_scores_and_remembers(win):
+    lv = win.learn
+    lv.tabs.setCurrentIndex(1)
+    q = lv.question
+    assert q is not None and not lv.opt_buttons[0].isHidden()
+    lv._answer(q.answer)
+    assert lv.session.correct == 1 and lv.next_btn.isEnabled()
+    assert "Right" in lv.feedback.toHtml()
+    lv.next_question()
+    lv._answer((lv.question.answer + 1) % len(lv.question.options))
+    assert lv.session.asked == 2 and lv.session.streak == 0
+    assert win.ctrl.config.get("learn")["stats"]["asked"] == 2
+
+
+def test_learn_reference_audio_is_written(win, tmp_path):
+    lv = win.learn
+    lv._play_key("chord")
+    wavs = list((tmp_path / "learn_audio").glob("*.wav"))
+    assert len(wavs) == 1 and wavs[0].read_bytes()[:4] == b"RIFF"
+
+
+def _fake_analysis(path, secs):
+    from harmonic_set_builder.analysis.labels import Section
+    from harmonic_set_builder.analysis.store import TrackAnalysis
+
+    a = TrackAnalysis(path, "0:0", "builtin==1", duration=128.0, bpm=120.0, grid="mixxx")
+    a.sections = [Section(l, 1, s, e, s * 2.0, e * 2.0, 0.5) for l, s, e in secs]
+    a.bars = [{"bar": i, "start_sec": i * 2.0, "energy": 0.5, "rms": 0, "low": 0, "high": 0, "centroid": 0,
+               "onsets": 0} for i in range(64)]
+    return a
+
+
+def test_phrases_view_shows_structure_and_transitions(win):
+    drop(win.set_model, "track", [1, 3])
+    store = win.ctrl.analysis_store
+    for tid in (1, 3):
+        store.save(_fake_analysis(win.ctrl.library.tracks[tid].location,
+                                  [("Intro", 0, 16), ("Drop", 16, 48), ("Outro", 48, 64)]))
+    win.ctrl.refresh_structure_index()
+    pv = win.phrases
+    win.show_view(1)
+    pv.source.setCurrentIndex(0)  # current set
+    pv._dirty = True
+    pv.refresh()
+    assert pv.model.rowCount() == 2
+    assert pv.model.item(0, 5).text() == "I16 D32 O16"
+    pv.table.selectRow(0)
+    assert pv.sections.rowCount() == 3 and pv.sections.item(1, 0).text() == "Drop"
+    pv.tabs.setCurrentIndex(1)
+    assert "Start B's 16-bar intro at A's outro" in pv.trans.toPlainText()
+    # The set builder's Structure column reads the same results.
+    col = win.set_model.col_index("structure")
+    assert win.set_model.index(0, col).data() == "I16 D32 O16"
+
+
+def test_cue_export_dialog_dry_run(win, tmp_path, monkeypatch):
+    import sqlite3
+
+    from harmonic_set_builder.ui.phrases import CueExportDialog
+
+    db = tmp_path / "mixxxdb.sqlite"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE cues (id INTEGER PRIMARY KEY AUTOINCREMENT, track_id INTEGER, type INTEGER, "
+              "position INTEGER, length INTEGER, hotcue INTEGER, label TEXT, color INTEGER)")
+    c.commit()
+    c.close()
+    before = db.read_bytes()
+    t = win.ctrl.library.tracks[1]
+    t.samplerate = 44100
+    win.ctrl.analysis_store.save(_fake_analysis(t.location, [("Intro", 0, 16), ("Drop", 16, 64)]))
+    win.ctrl.db_path = db
+    dlg = CueExportDialog(win.phrases, [t])
+    text = dlg.out.toPlainText()
+    assert "DRY RUN" in text and "hot cue 2 “Drop”" in text and dlg.write_btn.isEnabled()
+    assert db.read_bytes() == before

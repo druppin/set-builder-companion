@@ -48,6 +48,7 @@ class Controller(QObject):
     setChanged = Signal()
     viewChanged = Signal()
     setsListChanged = Signal()
+    analysisChanged = Signal()  # phrase analysis results added or changed
     message = Signal(str)
 
     def __init__(self, config: Config, data_dir: Path, parent=None):
@@ -69,6 +70,7 @@ class Controller(QObject):
         self._autosave.setSingleShot(True)
         self._autosave.setInterval(AUTOSAVE_MS)
         self._autosave.timeout.connect(self.save_now)
+        self._analysis_store = None
 
     # ------------------------------------------------------------ library
     def refresh_library(self, override: Optional[str] = None) -> bool:
@@ -94,6 +96,26 @@ class Controller(QObject):
         if missing:
             self.message.emit(f"{len(missing)} track(s) in this set can no longer be found in the library.")
         return True
+
+    @property
+    def snapshot_path(self) -> Path:
+        return self.data_dir / "snapshot" / "library-snapshot.sqlite"
+
+    @property
+    def analysis_store(self):
+        """Phrase analysis results (the set builder's own DB, never Mixxx's)."""
+        if self._analysis_store is None:
+            from ..analysis.store import AnalysisStore
+
+            self._analysis_store = AnalysisStore(self.data_dir / "analysis.sqlite")
+            self.refresh_structure_index(emit=False)
+        return self._analysis_store
+
+    def refresh_structure_index(self, emit: bool = True) -> None:
+        C.STRUCTURE.clear()
+        C.STRUCTURE.update({p: row.summary for p, row in self.analysis_store.index().items()})
+        if emit:
+            self.analysisChanged.emit()
 
     def ctx(self) -> Context:
         return Context(

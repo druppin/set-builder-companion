@@ -1,17 +1,19 @@
-"""Settings dialog: BPM bands, harmonic rules, energy, routes, display and the move table."""
+"""Settings dialog: BPM bands, harmonic rules, energy, routes, display, the move table
+and phrase analysis."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHeaderView, QSpinBox,
-    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
+    QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ..core.camelot import DEFAULT_MOVES, TIER_NAMES
 from ..core.settings import Settings
+from .file_dialogs import open_file
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, s: Settings, parent=None):
+    def __init__(self, s: Settings, parent=None, allin1_default: str = ""):
         super().__init__(parent)
         self.s = s
         self.setWindowTitle("Settings")
@@ -95,6 +97,39 @@ class SettingsDialog(QDialog):
         f.addRow(self.autodj)
         tabs.addTab(ds, "Display")
 
+        ph = QWidget()
+        f = QFormLayout(ph)
+        self.backend = QComboBox()
+        self.backend.addItem("Built-in (fast, tuned for dance music)", "builtin")
+        self.backend.addItem("allin1 (neural network, minutes per track on CPU)", "allin1")
+        self.backend.setCurrentIndex(max(0, self.backend.findData(s.analysis_backend)))
+        self.allin1 = QLineEdit(s.allin1_python)
+        self.allin1.setPlaceholderText(allin1_default or "python of the allin1 environment")
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._browse_allin1)
+        check = QPushButton("Check")
+        check.clicked.connect(self._check_allin1)
+        row = QHBoxLayout()
+        row.addWidget(self.allin1, 1)
+        row.addWidget(browse)
+        row.addWidget(check)
+        self.allin1_status = QLabel()
+        self.allin1_status.setObjectName("hint")
+        self.allin1_status.setWordWrap(True)
+        self._allin1_default = allin1_default
+        self.workers = QSpinBox(minimum=0, maximum=16, value=s.analysis_workers, specialValueText="Automatic")
+        self.workers.setToolTip("Tracks analyzed at once (allin1 always uses one)")
+        self.max_hotcues = QSpinBox(minimum=1, maximum=36, value=s.max_hotcues)
+        self.complete = QCheckBox("Cue export may fill in a missing intro end / outro start on Mixxx's markers")
+        self.complete.setChecked(s.complete_markers)
+        f.addRow("Analyzer", self.backend)
+        f.addRow("allin1 Python", row)
+        f.addRow("", self.allin1_status)
+        f.addRow("Parallel analyses", self.workers)
+        f.addRow("Hot cue slots for export", self.max_hotcues)
+        f.addRow(self.complete)
+        tabs.addTab(ph, "Phrase analysis")
+
         lay = QVBoxLayout(self)
         lay.addWidget(tabs)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.RestoreDefaults)
@@ -102,6 +137,19 @@ class SettingsDialog(QDialog):
         bb.rejected.connect(self.reject)
         bb.button(QDialogButtonBox.RestoreDefaults).clicked.connect(self._defaults)
         lay.addWidget(bb)
+
+    def _browse_allin1(self) -> None:
+        path = open_file(self, "Python of the allin1 environment", self.allin1.text() or self._allin1_default, "")
+        if path:
+            self.allin1.setText(path)
+
+    def _check_allin1(self) -> None:
+        from ..analysis.structure import allin1_available
+
+        self.allin1_status.setText("Checking…")
+        self.allin1_status.repaint()
+        ok, msg = allin1_available(self.allin1.text().strip() or self._allin1_default)
+        self.allin1_status.setText(("✓ " if ok else "✗ ") + msg)
 
     def _defaults(self):
         d = Settings()
@@ -121,6 +169,11 @@ class SettingsDialog(QDialog):
         self.allow_caution.setChecked(d.route_allow_caution)
         self.max_hops.setValue(d.route_max_hops)
         self.fallback.setChecked(d.library_fallback)
+        self.backend.setCurrentIndex(self.backend.findData(d.analysis_backend))
+        self.allin1.setText(d.allin1_python)
+        self.workers.setValue(d.analysis_workers)
+        self.max_hotcues.setValue(d.max_hotcues)
+        self.complete.setChecked(d.complete_markers)
 
     def accept(self):
         s = self.s
@@ -133,6 +186,11 @@ class SettingsDialog(QDialog):
         s.mix_overlap_bars = self.overlap.value()
         s.energy_baseline = self.baseline.value()
         s.energy_from_tags = self.tags.isChecked()
+        s.analysis_backend = self.backend.currentData()
+        s.allin1_python = self.allin1.text().strip()
+        s.analysis_workers = self.workers.value()
+        s.max_hotcues = self.max_hotcues.value()
+        s.complete_markers = self.complete.isChecked()
         overrides = {}
         for i, (name, m) in enumerate(DEFAULT_MOVES.items()):
             ov = {}

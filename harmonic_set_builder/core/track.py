@@ -37,6 +37,7 @@ class Track:
     location: str = ""
     cover_type: int = 0  # Mixxx CoverInfo type: 0 none, 1 embedded, 2 file
     cover_location: str = ""  # cover file, relative to the track's folder
+    samplerate: int = 0
 
     @property
     def display(self) -> str:

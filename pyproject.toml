@@ -7,13 +7,14 @@ name = "harmonic-set-builder"
 version = "0.1.0"
 description = "Plan harmonic DJ sets from a Mixxx library: Camelot moves, energy and BPM, with routes to the tracks you want to reach."
 requires-python = ">=3.11"
-dependencies = ["PySide6>=6.5", "pyqtgraph>=0.13.3"]
+dependencies = ["PySide6>=6.5", "pyqtgraph>=0.13.3", "numpy", "librosa>=0.10"]
 
 [project.optional-dependencies]
 test = ["pytest>=7", "pytest-qt>=4.2"]
 
 [project.scripts]
 harmonic-set-builder = "harmonic_set_builder.__main__:main"
+hsb = "harmonic_set_builder.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["harmonic_set_builder*"]

@@ -47,6 +47,8 @@ class PreviewBar(QWidget):
         self.player.durationChanged.connect(self._duration)
         self.player.playbackStateChanged.connect(self._state)
         self.player.errorOccurred.connect(lambda _e, text: self.message.emit(f"Preview failed: {text}"))
+        self.player.mediaStatusChanged.connect(self._media_status)
+        self._pending_ms: Optional[int] = None
 
         st = self.style()
         self.play_btn = QToolButton()
@@ -115,6 +117,26 @@ class PreviewBar(QWidget):
         self.title.setToolTip(track.location)
         self.player.setSource(QUrl.fromLocalFile(track.location))
         self.player.play()
+
+    def preview_at(self, track: Optional[Track], seconds: float) -> None:
+        """Play ``track`` from ``seconds`` (e.g. a section start)."""
+        if track is None:
+            return
+        ms = int(seconds * 1000)
+        if self.track and self.track.id == track.id and self.track.location == track.location \
+                and self.player.source().isValid():
+            self.player.setPosition(ms)
+            self.player.play()
+            return
+        self._pending_ms = ms
+        self.preview(track)
+        if self.track is not track:
+            self._pending_ms = None  # file not found
+
+    def _media_status(self, status) -> None:
+        if self._pending_ms is not None and status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferedMedia):
+            self.player.setPosition(self._pending_ms)
+            self._pending_ms = None
 
     def set_cover(self, pixmap) -> None:
         self.cover.setPixmap(pixmap) if pixmap is not None else self.cover.clear()

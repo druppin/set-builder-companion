@@ -24,6 +24,12 @@ class Settings:
     key_notation: str = "camelot"
     show_history_playlists: bool = False
     show_autodj_playlist: bool = False
+    # Phrase analysis
+    analysis_backend: str = "builtin"  # builtin | allin1
+    allin1_python: str = ""  # empty: <data dir>/allin1-venv
+    analysis_workers: int = 0  # 0 = automatic
+    max_hotcues: int = 8  # hot cue slots cue export may use
+    complete_markers: bool = True  # fill in a missing intro end / outro start on Mixxx's markers
 
     def moves(self) -> dict[str, MoveDef]:
         out = dict(DEFAULT_MOVES)

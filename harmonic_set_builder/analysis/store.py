@@ -1,0 +1,237 @@
+"""Analysis results in the set builder's own SQLite database (spec §4).
+
+Lives in the app data directory, never in Mixxx's. Also caches each backend's raw
+output (so labels can be re-tuned without re-running allin1) and remembers which
+Mixxx cues this tool exported (so it only ever replaces its own).
+"""
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable, Optional
+
+from .labels import Section, summary
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS track_analysis (
+  track_path      TEXT PRIMARY KEY,
+  mixxx_track_id  INTEGER,
+  file_hash       TEXT NOT NULL,
+  analyzer        TEXT NOT NULL,
+  analyzed_at     TEXT NOT NULL,
+  bpm             REAL,
+  first_downbeat  REAL,
+  duration        REAL,
+  grid            TEXT
+);
+CREATE TABLE IF NOT EXISTS sections (
+  track_path  TEXT REFERENCES track_analysis(track_path),
+  idx         INTEGER,
+  label       TEXT,
+  number      INTEGER,
+  start_sec   REAL,
+  end_sec     REAL,
+  start_bar   INTEGER,
+  end_bar     INTEGER,
+  mean_energy REAL,
+  source      TEXT,
+  repeated    INTEGER DEFAULT 0,
+  PRIMARY KEY (track_path, idx)
+);
+CREATE TABLE IF NOT EXISTS bar_energy (
+  track_path TEXT REFERENCES track_analysis(track_path),
+  bar        INTEGER,
+  start_sec  REAL,
+  energy     REAL,
+  rms REAL, low REAL, high REAL, centroid REAL, onsets REAL,
+  PRIMARY KEY (track_path, bar)
+);
+CREATE TABLE IF NOT EXISTS raw_cache (
+  track_path TEXT,
+  backend    TEXT,
+  file_hash  TEXT NOT NULL,
+  data       TEXT NOT NULL,
+  PRIMARY KEY (track_path, backend)
+);
+CREATE TABLE IF NOT EXISTS exported_cues (
+  mixxx_track_id INTEGER,
+  cue_id         INTEGER,
+  kind           TEXT,
+  track_path     TEXT,
+  exported_at    TEXT,
+  PRIMARY KEY (mixxx_track_id, cue_id)
+);
+"""
+
+BAR_FIELDS = ("energy", "rms", "low", "high", "centroid", "onsets")
+
+
+def file_signature(path: str) -> str:
+    """mtime + size: cheap, and changes whenever the file is re-tagged or replaced."""
+    st = os.stat(path)
+    return f"{st.st_mtime_ns}:{st.st_size}"
+
+
+@dataclass
+class TrackAnalysis:
+    track_path: str
+    file_hash: str
+    analyzer: str
+    analyzed_at: str = ""
+    mixxx_track_id: Optional[int] = None
+    bpm: Optional[float] = None
+    first_downbeat: Optional[float] = None
+    duration: float = 0.0
+    grid: str = ""  # where the beat grid came from: mixxx | allin1 | detected
+    sections: list[Section] = field(default_factory=list)
+    bars: list[dict] = field(default_factory=list)  # {"bar", "start_sec", energy, rms, low, ...}
+
+    @property
+    def bar_times(self) -> list[float]:
+        return [b["start_sec"] for b in self.bars]
+
+    def bar_time(self, bar: int) -> float:
+        if 0 <= bar < len(self.bars):
+            return self.bars[bar]["start_sec"]
+        if bar >= len(self.bars) and self.bars:
+            return self.duration
+        return 0.0
+
+    def to_dict(self) -> dict:
+        d = {k: getattr(self, k) for k in ("track_path", "file_hash", "analyzer", "analyzed_at", "mixxx_track_id",
+                                             "bpm", "first_downbeat", "duration", "grid", "bars")}
+        d["sections"] = [s.to_dict() for s in self.sections]
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "TrackAnalysis":
+        a = cls(**{k: d[k] for k in ("track_path", "file_hash", "analyzer") if k in d})
+        for k in ("analyzed_at", "mixxx_track_id", "bpm", "first_downbeat", "duration", "grid", "bars"):
+            if k in d:
+                setattr(a, k, d[k])
+        a.sections = [Section.from_dict(s) for s in d.get("sections") or []]
+        return a
+
+
+@dataclass
+class IndexRow:
+    file_hash: str
+    analyzer: str
+    analyzed_at: str
+    summary: str
+
+
+class AnalysisStore:
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(self.path)
+        self.conn.executescript(SCHEMA)
+        self.conn.commit()
+
+    def close(self) -> None:
+        self.conn.close()
+
+    # ------------------------------------------------------------ analyses
+    def save(self, a: TrackAnalysis) -> None:
+        a.analyzed_at = a.analyzed_at or datetime.now().isoformat(timespec="seconds")
+        with self.conn:
+            self._delete(a.track_path)
+            self.conn.execute(
+                "INSERT INTO track_analysis VALUES (?,?,?,?,?,?,?,?,?)",
+                (a.track_path, a.mixxx_track_id, a.file_hash, a.analyzer, a.analyzed_at, a.bpm, a.first_downbeat,
+                 a.duration, a.grid),
+            )
+            self.conn.executemany(
+                "INSERT INTO sections VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                [(a.track_path, i, s.label, s.number, s.start_sec, s.end_sec, s.start_bar, s.end_bar, s.mean_energy,
+                  s.source, int(s.repeated)) for i, s in enumerate(a.sections)],
+            )
+            self.conn.executemany(
+                "INSERT INTO bar_energy VALUES (?,?,?,?,?,?,?,?,?)",
+                [(a.track_path, b["bar"], b["start_sec"], *(b.get(k) for k in BAR_FIELDS)) for b in a.bars],
+            )
+
+    def _delete(self, path: str) -> None:
+        for t in ("sections", "bar_energy", "track_analysis"):
+            self.conn.execute(f"DELETE FROM {t} WHERE track_path = ?", (path,))
+
+    def delete(self, path: str) -> None:
+        with self.conn:
+            self._delete(path)
+
+    def get(self, path: str) -> Optional[TrackAnalysis]:
+        r = self.conn.execute(
+            "SELECT track_path, file_hash, analyzer, analyzed_at, mixxx_track_id, bpm, first_downbeat, duration, grid "
+            "FROM track_analysis WHERE track_path = ?", (path,)).fetchone()
+        if not r:
+            return None
+        a = TrackAnalysis(*r[:3], analyzed_at=r[3], mixxx_track_id=r[4], bpm=r[5], first_downbeat=r[6],
+                          duration=r[7] or 0.0, grid=r[8] or "")
+        a.sections = [
+            Section(label=x[0], number=x[1], start_sec=x[2], end_sec=x[3], start_bar=x[4], end_bar=x[5],
+                    mean_energy=x[6], source=x[7], repeated=bool(x[8]))
+            for x in self.conn.execute(
+                "SELECT label, number, start_sec, end_sec, start_bar, end_bar, mean_energy, source, repeated "
+                "FROM sections WHERE track_path = ? ORDER BY idx", (path,))
+        ]
+        a.bars = [
+            {"bar": x[0], "start_sec": x[1], **dict(zip(BAR_FIELDS, x[2:]))}
+            for x in self.conn.execute(
+                "SELECT bar, start_sec, " + ", ".join(BAR_FIELDS) + " FROM bar_energy WHERE track_path = ? ORDER BY bar",
+                (path,))
+        ]
+        return a
+
+    def index(self) -> dict[str, IndexRow]:
+        """Every analyzed path with a one-line section summary (for big tables)."""
+        secs: dict[str, list[Section]] = {}
+        for p, label, sb, eb in self.conn.execute(
+                "SELECT track_path, label, start_bar, end_bar FROM sections ORDER BY track_path, idx"):
+            secs.setdefault(p, []).append(Section(label, 0, sb, eb, 0, 0, 0))
+        return {
+            p: IndexRow(h, an, at, summary(secs.get(p, [])))
+            for p, h, an, at in self.conn.execute("SELECT track_path, file_hash, analyzer, analyzed_at FROM track_analysis")
+        }
+
+    def needs_analysis(self, path: str, backend: str, force: bool = False) -> bool:
+        if force:
+            return True
+        r = self.conn.execute("SELECT file_hash, analyzer FROM track_analysis WHERE track_path = ?", (path,)).fetchone()
+        if not r:
+            return True
+        try:
+            sig = file_signature(path)
+        except OSError:
+            return False  # file not reachable (drive unmounted): keep what we have
+        return r[0] != sig or not r[1].startswith(backend)
+
+    # ----------------------------------------------------------- raw cache
+    def raw_get(self, path: str, backend: str, file_hash: str) -> Optional[dict]:
+        r = self.conn.execute("SELECT file_hash, data FROM raw_cache WHERE track_path = ? AND backend = ?",
+                              (path, backend)).fetchone()
+        return json.loads(r[1]) if r and r[0] == file_hash else None
+
+    def raw_put(self, path: str, backend: str, file_hash: str, data: dict) -> None:
+        with self.conn:
+            self.conn.execute("INSERT OR REPLACE INTO raw_cache VALUES (?,?,?,?)",
+                              (path, backend, file_hash, json.dumps(data)))
+
+    # ------------------------------------------------------- exported cues
+    def own_cue_ids(self, track_id: int) -> set[int]:
+        return {r[0] for r in self.conn.execute("SELECT cue_id FROM exported_cues WHERE mixxx_track_id = ?", (track_id,))}
+
+    def record_cues(self, track_id: int, path: str, cues: Iterable[tuple[int, str]]) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self.conn:
+            self.conn.executemany("INSERT OR REPLACE INTO exported_cues VALUES (?,?,?,?,?)",
+                                  [(track_id, cid, kind, path, now) for cid, kind in cues])
+
+    def forget_cues(self, track_id: int, cue_ids: Iterable[int]) -> None:
+        with self.conn:
+            self.conn.executemany("DELETE FROM exported_cues WHERE mixxx_track_id = ? AND cue_id = ?",
+                                  [(track_id, c) for c in cue_ids])

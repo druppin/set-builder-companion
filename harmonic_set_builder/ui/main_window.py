@@ -1,4 +1,9 @@
-"""Main window: energy graph on top; setlist + pool | track table | sources."""
+"""Main window with three views sharing the preview bar:
+
+* Set Builder: energy graph on top; setlist + pool | track table | sources.
+* Phrases: track structure analysis, transition points, cue export.
+* Learn: the Camelot wheel, key reference audio and a quiz.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,8 +12,8 @@ from PySide6.QtCore import QByteArray, QItemSelectionModel, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QToolBar, QToolButton,
-    QVBoxLayout, QWidget,
+    QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QSplitter, QStackedWidget, QToolBar,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..core.bpm import BAND_NAMES
@@ -17,14 +22,21 @@ from ..core.setlist import POOL_ROUTE
 from . import columns as C
 from .controller import Controller
 from .graph import EnergyGraph
+from .learn import LearnView
 from .models import RowModel, SortProxy, TrackProxy
 from .covers import CoverCache
 from .file_dialogs import open_file, save_file
 from .models import cover_tooltip
+from .phrases import PhrasesView
 from .preview import PreviewBar
 from .settings_dialog import SettingsDialog
 from .sources import SourcesTree
 from .views import RowTable
+
+VIEWS = (("builder", "Set Builder", "Plan the set: suggestions, routes, the energy graph"),
+         ("phrases", "Phrases", "Track structure: intros, builds, drops, breakdowns, outros; transition points; "
+                                "cue export"),
+         ("learn", "Learn", "The Camelot wheel explained, key reference audio, and a quiz"))
 
 
 class MainWindow(QMainWindow):
@@ -176,13 +188,20 @@ class MainWindow(QMainWindow):
             m.covers = self.covers
             self.covers.loaded.connect(m.cover_loaded)
         self.covers.loaded.connect(self._cover_loaded)
+        # ---- views: Set Builder | Phrases | Learn, sharing the preview bar
+        self.phrases = PhrasesView(ctrl, self.preview)
+        self.learn = LearnView(ctrl, self.preview)
+        self.stack = QStackedWidget()
+        for w in (self.top_split, self.phrases, self.learn):
+            self.stack.addWidget(w)
         central = QWidget()
         cv = QVBoxLayout(central)
         cv.setContentsMargins(0, 0, 0, 0)
         cv.setSpacing(0)
-        cv.addWidget(self.top_split, 1)
+        cv.addWidget(self.stack, 1)
         cv.addWidget(self.preview)
         self.setCentralWidget(central)
+        self._build_view_bar()
         for view in (self.set_view, self.pool_view, self.track_view):
             act = QAction("Preview", view)
             act.setShortcut(QKeySequence(Qt.Key_Space))
@@ -196,6 +215,7 @@ class MainWindow(QMainWindow):
         self._build_menus()
 
         ctrl.libraryChanged.connect(self._library_changed)
+        ctrl.analysisChanged.connect(self._structure_changed)
         ctrl.setChanged.connect(self._set_changed)
         ctrl.viewChanged.connect(self._view_changed)
         ctrl.setsListChanged.connect(self._sets_list_changed)
@@ -212,6 +232,36 @@ class MainWindow(QMainWindow):
             v.layoutChanged.connect(self._layout_timer.start)
         for s in (self.left_split, self.main_split, self.top_split):
             s.splitterMoved.connect(lambda *a: self._layout_timer.start())
+
+    # -------------------------------------------------------------- views
+    def _build_view_bar(self) -> None:
+        tb = QToolBar("Views")
+        tb.setObjectName("views")
+        tb.setMovable(False)
+        group = QActionGroup(self)
+        self.view_actions: list[QAction] = []
+        for i, (_key, label, tip) in enumerate(VIEWS):
+            a = QAction(label, self)
+            a.setCheckable(True)
+            a.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
+            a.setToolTip(f"{tip} ({a.shortcut().toString(QKeySequence.NativeText)})")
+            a.triggered.connect(lambda _=False, i=i: self.show_view(i))
+            group.addAction(a)
+            tb.addAction(a)
+            self.view_actions.append(a)
+        self.addToolBar(Qt.TopToolBarArea, tb)
+        self.view_actions[0].setChecked(True)
+
+    def show_view(self, i: int) -> None:
+        i = max(0, min(i, len(VIEWS) - 1))
+        self.stack.setCurrentIndex(i)
+        self.view_actions[i].setChecked(True)
+        self._layout_timer.start()
+
+    def _structure_changed(self) -> None:
+        for m in (self.set_model, self.pool_model, self.track_model):
+            if m.rowCount():
+                m.dataChanged.emit(m.index(0, 0), m.index(m.rowCount() - 1, m.columnCount() - 1))
 
     # ------------------------------------------------------------ toolbar
     def _build_set_toolbar(self) -> QToolBar:
@@ -281,6 +331,9 @@ class MainWindow(QMainWindow):
         e.addAction(r)
         e.addSeparator()
         e.addAction("Settings…", self._settings)
+        v = mb.addMenu("&View")
+        for a in self.view_actions:
+            v.addAction(a)
         h = mb.addMenu("&Help")
         h.addAction("Move legend", self._legend)
         delete = QAction(self)
@@ -302,6 +355,7 @@ class MainWindow(QMainWindow):
             m.notation = s.key_notation
         self.preview.notation = s.key_notation
         self._view_changed()
+        self.learn.library_changed()
 
     def _set_changed(self) -> None:
         self._building = True
@@ -653,8 +707,9 @@ class MainWindow(QMainWindow):
             self.ctrl.config.save()
 
     def _settings(self) -> None:
-        if SettingsDialog(self.ctrl.settings, self).exec():
+        if SettingsDialog(self.ctrl.settings, self, self.phrases.allin1_python()).exec():
             self.ctrl.settings_changed()
+            self.phrases.backend.setCurrentIndex(max(0, self.phrases.backend.findData(self.ctrl.settings.analysis_backend)))
 
     def _legend(self) -> None:
         moves = self.ctrl.settings.moves()
@@ -688,7 +743,9 @@ class MainWindow(QMainWindow):
             "pool_open": self.pool_toggle.isChecked(),
             "preview_volume": self.preview.volume.value() / 100,
             "filters": dict(self.proxy.filters),
+            "view": self.stack.currentIndex(),
         })
+        self.phrases._save_cfg()
         self.ctrl.config.save()
 
     def restore_layout(self) -> None:
@@ -704,8 +761,12 @@ class MainWindow(QMainWindow):
         self.track_view.restore(ui.get("track_cols"))
         self.pool_toggle.setChecked(ui.get("pool_open", True))
         self._apply_filter_widgets(ui.get("filters"))
+        self.phrases.restore()
+        self.show_view(int(ui.get("view", 0)))
 
     def closeEvent(self, ev) -> None:
+        self.phrases.shutdown()
+        self.learn.synth.stop()
         self.ctrl.save_now()
         self.save_layout()
         super().closeEvent(ev)

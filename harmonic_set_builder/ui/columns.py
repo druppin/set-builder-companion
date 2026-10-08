@@ -139,6 +139,14 @@ def _rating(r: Row, _n) -> str:
     return "★" * r.track.rating if r.track and r.track.rating else ""
 
 
+# Phrase-analysis summaries by file path ("I16 B8 D32 …"), kept current by the Phrases view.
+STRUCTURE: dict[str, str] = {}
+
+
+def _structure(r: Row, _n) -> str:
+    return STRUCTURE.get(r.track.location, "") if r.track else ""
+
+
 def _num_sort(attr):
     return lambda r: (getattr(r.track, attr) or 0) if r.track else -1
 
@@ -177,6 +185,9 @@ COLUMNS: list[Col] = [
     Col("bpm_delta", "BPM Δ", 60, _bpmd, lambda r: r.rel.bpm.abs_delta if r.rel and r.rel.bpm else 1e9, True, True),
     Col("tier", "Tier", 85, _tier, lambda r: r.rank[:1] if r.rank else (9,), relational=True),
     Col("half", "½/2×", 75, _half, relational=True, tooltip="Matched at half or double tempo"),
+    Col("structure", "Structure", 150, _structure,
+        tooltip="Sections from phrase analysis: I Intro, B Build, D Drop, Br Breakdown, G Groove, O Outro, "
+                "with lengths in bars"),
     Col("in_set", "In set", 45, lambda r, n: "✓" if r.in_set else "", lambda r: r.in_set),
     Col("want", "★", 30, lambda r, n: "★" if r.want else "", lambda r: r.want, tooltip="In To be added"),
 ]
@@ -189,7 +200,8 @@ POOL_COLUMNS = [c.id for c in COLUMNS if c.id not in ("pos", "fix")]
 DEFAULT_VISIBLE = {
     "track": ["preview", "cover", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta", "tier", "half",
               "in_set", "want", "genre", "duration", "rating"],
-    "set": ["fix", "preview", "cover", "pos", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta"],
+    "set": ["fix", "preview", "cover", "pos", "artist", "title", "key", "bpm", "move", "mood", "energy", "bpm_delta",
+            "structure"],
     "pool": ["menu", "preview", "cover", "artist", "title", "key", "bpm", "move", "bpm_delta"],
 }
 
