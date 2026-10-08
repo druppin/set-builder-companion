@@ -332,6 +332,9 @@ def _fake_analysis(path, secs):
 
 
 def test_phrases_view_shows_structure_and_transitions(win):
+    from harmonic_set_builder.ui.phrases import C_STRUCT
+    from harmonic_set_builder.ui.sources import SET_KEY
+
     drop(win.set_model, "track", [1, 3])
     store = win.ctrl.analysis_store
     for tid in (1, 3):
@@ -340,11 +343,9 @@ def test_phrases_view_shows_structure_and_transitions(win):
     win.ctrl.refresh_structure_index()
     pv = win.phrases
     win.show_view(1)
-    pv.source.setCurrentIndex(0)  # current set
-    pv._dirty = True
-    pv.refresh()
+    pv.set_source(SET_KEY)
     assert pv.model.rowCount() == 2
-    assert pv.model.item(0, 5).text() == "I16 D32 O16"
+    assert pv.model.item(0, C_STRUCT).text() == "I16 D32 O16"
     pv.table.selectRow(0)
     assert pv.sections.rowCount() == 3 and pv.sections.item(1, 0).text() == "Drop"
     pv.tabs.setCurrentIndex(1)
@@ -352,6 +353,35 @@ def test_phrases_view_shows_structure_and_transitions(win):
     # The set builder's Structure column reads the same results.
     col = win.set_model.col_index("structure")
     assert win.set_model.index(0, col).data() == "I16 D32 O16"
+
+
+def test_phrases_sources_crates_playlists_and_status_filter(win):
+    from harmonic_set_builder.data.mixxx_db import Collection
+    from harmonic_set_builder.ui.sources import LIBRARY_KEY
+
+    lib = win.ctrl.library
+    lib.crates = [Collection("crate", 1, "House", [1, 2])]
+    lib.playlists = [Collection("playlist", 5, "Warmup", [3, 4, 5])]
+    win.ctrl.analysis_store.save(_fake_analysis(lib.tracks[2].location, [("Intro", 0, 16), ("Drop", 16, 64)]))
+    win.ctrl.refresh_structure_index()
+    win.ctrl.libraryChanged.emit()
+    pv = win.phrases
+    tree = pv.sources
+    labels = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
+    assert labels[:2] == ["Current set (0)", "Library (5 · 1 ✓)"]
+    crates = next(tree.topLevelItem(i) for i in range(tree.topLevelItemCount()) if tree.topLevelItem(i).text(0) == "Crates")
+    assert crates.child(0).text(0) == "House (2 · 1 ✓)"
+    tree.setCurrentItem(crates.child(0))  # clicking a crate lists its tracks
+    assert pv.focus_key == ("crate", 1) and pv.model.rowCount() == 2
+    pv.status_filter.setCurrentIndex(pv.status_filter.findData("new"))
+    assert pv.proxy.rowCount() == 1 and pv.count.text().startswith("1 of 2")
+    pv.status_filter.setCurrentIndex(0)
+    pv.set_source(("playlist", 5))
+    assert [pv.model.item(r, 2).text() for r in range(3)] == ["T3 9A", "T4 10A", "T5 7A"]
+    pv.set_source(LIBRARY_KEY)
+    assert pv.model.rowCount() == 5
+    win.save_layout()
+    assert win.ctrl.config.get("phrases")["source"] == list(LIBRARY_KEY)
 
 
 def test_cue_export_dialog_dry_run(win, tmp_path, monkeypatch):

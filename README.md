@@ -68,8 +68,11 @@ The window has three views (toolbar or *View* menu, **Ctrl+1 / 2 / 3**): **Set B
 
 Track structure: where the intro, builds, drops, breakdowns and outro are, from audio analysis.
 
-- Pick the tracks to look at (*Current set*, the focused crate/playlist, or the whole library), then
-  **Analyze selected** or **Analyze all new**. Results are kept and only redone when a file changes
+- The left-hand tree works like the Set Builder's Sources: **Current set**, **Library**, and foldable
+  **Crates** and **Playlists**, each with "tracks · analyzed ✓" counts (right-click → *Open as set* works here
+  too). Click one to list its tracks; search and the status filter (*Not analyzed*, *Analyzed*, *File
+  changed*, *Failed*) narrow the list, and right-clicking the header hides columns. Then
+  **Analyze selected** or **Analyze all new** (everything listed that isn't analyzed yet). Results are kept and only redone when a file changes
   (mtime + size) or on *Re-analyze* (right-click). Analysis runs in background processes at low priority;
   it's meant to run while Mixxx is closed, and asks first if Mixxx is open.
 - The plot shows the per-bar **energy** curve (loudness, kick/bass, highs, brightness and onset density,

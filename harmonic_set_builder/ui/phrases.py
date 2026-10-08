@@ -26,15 +26,46 @@ from ..core.track import Track
 from ..data import mixxx_cues, mixxx_db
 from ..data.paths import default_allin1_python
 from . import theme
+from .sources import SET_KEY, SourcesTree
 
 SECTION_COLORS = {
     INTRO: QColor("#32be44"), BUILD: QColor("#f8d200"), DROP: QColor("#e04040"),
     BREAKDOWN: QColor("#3b6cff"), GROOVE: QColor("#af5ccc"), OUTRO: QColor("#42d4f4"),
 }
-SOURCES = (("set", "Current set"), ("focus", "Focused crate / playlist"), ("library", "Whole library"))
-COLS = ["#", "Artist", "Title", "BPM", "Key", "Structure", "Status"]
+COLS = ["#", "Artist", "Title", "Genre", "BPM", "Key", "Duration", "Structure", "Status"]
+C_POS, C_STRUCT, C_STATUS = 0, 7, 8
+STATUS_FILTERS = (("all", "All tracks"), ("new", "Not analyzed"), ("analyzed", "Analyzed"),
+                  ("changed", "File changed"), ("failed", "Failed"))
 PATH_ROLE = Qt.UserRole + 1
 SORT_ROLE = Qt.UserRole + 2
+
+
+class TrackFilter(QSortFilterProxyModel):
+    """Search text (any column) plus an analysis-status filter."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.status = "all"
+        self.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.setFilterKeyColumn(-1)
+
+    def set_status(self, status: str) -> None:
+        if hasattr(self, "beginFilterChange"):  # Qt 6.10+
+            self.beginFilterChange()
+            self.status = status
+            self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+        else:
+            self.status = status
+            self.invalidateFilter()
+
+    def filterAcceptsRow(self, row, parent) -> bool:
+        if self.status != "all":
+            st = self.sourceModel().index(row, C_STATUS, parent).data() or ""
+            ok = {"new": st in ("", "queued"), "analyzed": st == "analyzed", "changed": st == "file changed",
+                  "failed": st.startswith("failed")}[self.status]
+            if not ok:
+                return False
+        return super().filterAcceptsRow(row, parent)
 
 
 def fmt_time(sec: float) -> str:
@@ -223,14 +254,20 @@ class PhrasesView(QWidget):
         self._errors: list[str] = []
 
         cfg = ctrl.config.get("phrases", {}) or {}
-        self.source = QComboBox()
-        for key, label in SOURCES:
-            self.source.addItem(label, key)
-        self.source.setCurrentIndex(max(0, self.source.findData(cfg.get("source", "set"))))
-        self.source.currentIndexChanged.connect(lambda _i: (self._save_cfg(), self.refresh()))
+        self.focus_key = tuple(cfg.get("source") or SET_KEY)
+        self.sources = SourcesTree(set_item=True)
+        self.sources.setToolTip("Counts: tracks · analyzed (✓)")
+        self.sources.focused.connect(self._source_focused)
+        self.sources.openAsSet.connect(ctrl.import_collection)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search…")
+        self.search.setPlaceholderText("Search artist, title, genre…")
         self.search.setClearButtonEnabled(True)
+        self.status_filter = QComboBox()
+        for key, label in STATUS_FILTERS:
+            self.status_filter.addItem(label, key)
+        self.status_filter.setToolTip("Show tracks by analysis status")
+        self.count = QLabel()
+        self.count.setObjectName("hint")
         self.backend = QComboBox()
         self.backend.addItem("Built-in analyzer", BUILTIN)
         self.backend.addItem("allin1 (slow, ML)", ALLIN1)
@@ -257,24 +294,22 @@ class PhrasesView(QWidget):
         self.export_btn.clicked.connect(self._export)
 
         top = QHBoxLayout()
-        top.addWidget(QLabel("Tracks:"))
-        top.addWidget(self.source)
-        top.addWidget(self.search, 1)
         top.addWidget(self.backend)
         top.addWidget(self.analyze_btn)
         top.addWidget(self.analyze_all_btn)
         top.addWidget(self.stop_btn)
         top.addWidget(self.bar)
+        top.addStretch(1)
         top.addWidget(self.export_btn)
 
         self.model = QStandardItemModel(0, len(COLS))
         self.model.setHorizontalHeaderLabels(COLS)
-        self.proxy = QSortFilterProxyModel()
+        self.proxy = TrackFilter()
         self.proxy.setSourceModel(self.model)
         self.proxy.setSortRole(SORT_ROLE)
-        self.proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
-        self.proxy.setFilterKeyColumn(-1)
-        self.search.textChanged.connect(self.proxy.setFilterFixedString)
+        self.search.textChanged.connect(lambda t: (self.proxy.setFilterFixedString(t), self._update_count()))
+        self.status_filter.currentIndexChanged.connect(
+            lambda _i: (self.proxy.set_status(self.status_filter.currentData()), self._update_count()))
         self.table = QTableView()
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(True)
@@ -285,9 +320,13 @@ class PhrasesView(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(22)
         self.table.setAlternatingRowColors(True)
         h = self.table.horizontalHeader()
-        for i, w in enumerate((32, 130, 170, 48, 40, 150, 90)):
+        for i, w in enumerate((32, 120, 170, 80, 44, 36, 48, 140, 85)):
             h.resizeSection(i, w)
-        h.setSectionResizeMode(2, QHeaderView.Stretch)
+        h.setContextMenuPolicy(Qt.CustomContextMenu)
+        h.customContextMenuRequested.connect(self._header_menu)
+        for i in cfg.get("hidden_cols", []):
+            if 0 < i < len(COLS):
+                self.table.setColumnHidden(i, True)
         self.table.selectionModel().currentRowChanged.connect(lambda cur, _p: self._row_changed(cur))
         self.table.doubleClicked.connect(lambda idx: self.preview.preview(self._track_at(idx)))
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -341,10 +380,23 @@ class PhrasesView(QWidget):
         rv.addWidget(legend)
         rv.addWidget(self.tabs, 2)
 
+        lib_box = QWidget()
+        lb = QVBoxLayout(lib_box)
+        lb.setContentsMargins(0, 0, 0, 0)
+        bar = QHBoxLayout()
+        bar.addWidget(self.search, 1)
+        bar.addWidget(self.status_filter)
+        bar.addWidget(self.count)
+        lb.addLayout(bar)
+        lb.addWidget(self.table, 1)
+
         self.split = QSplitter(Qt.Horizontal)
-        self.split.addWidget(self.table)
+        self.split.addWidget(self.sources)
+        self.split.addWidget(lib_box)
         self.split.addWidget(right)
-        self.split.setSizes([620, 760])
+        self.split.setStretchFactor(1, 1)
+        self.split.setStretchFactor(2, 1)
+        self.split.setSizes([200, 660, 640])
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 0)
@@ -352,8 +404,11 @@ class PhrasesView(QWidget):
         lay.addWidget(self.split, 1)
 
         preview.player.positionChanged.connect(self._playhead)
-        for sig in (ctrl.libraryChanged, ctrl.setChanged, ctrl.viewChanged):
+        for sig in (ctrl.libraryChanged, ctrl.setChanged):
             sig.connect(self._mark_dirty)
+        ctrl.libraryChanged.connect(self._populate_sources)
+        ctrl.setChanged.connect(self._set_changed)
+        self._sources_dirty = False
 
     # -------------------------------------------------------------- list
     def _mark_dirty(self) -> None:
@@ -366,32 +421,86 @@ class PhrasesView(QWidget):
         if self._dirty:
             self.refresh()
 
+    # ----------------------------------------------------------- sources
+    def _populate_sources(self) -> None:
+        lib = self.ctrl.library
+        s = self.ctrl.settings
+        analyzed = set(self.store.index())
+        loc = {t.id: t.location for t in lib.all_tracks}
+
+        def count(ids) -> str:
+            done = sum(1 for i in ids if loc.get(i) in analyzed)
+            return f"{len(ids)} · {done} ✓" if done else str(len(ids))
+
+        set_ids = [t.id for t in self.ctrl.real_tracks()]
+        self.sources.populate(lib, s.show_history_playlists, s.show_autodj_playlist, self.focus_key, count, set_ids)
+        self.focus_key = self.sources.focus_key()  # falls back to the library if the crate is gone
+
+    def _set_changed(self) -> None:
+        """The "Current set" count changed; rebuild the tree when the view is next refreshed."""
+        self._sources_dirty = True
+
+    def _source_focused(self, _src) -> None:
+        self.focus_key = self.sources.focus_key()
+        self._save_cfg()
+        self._dirty = True
+        self.refresh()
+
+    def set_source(self, key: tuple) -> None:
+        """Focus "Current set" (SET_KEY), the library (LIBRARY_KEY) or a (kind, id) collection."""
+        self.focus_key = tuple(key)
+        self._populate_sources()
+        self._dirty = True
+        self.refresh()
+
     def _source_tracks(self) -> list[Track]:
-        key = self.source.currentData()
-        if key == "set":
+        key = self.focus_key
+        if key == SET_KEY:
             return self.ctrl.real_tracks()
-        if key == "focus":
-            return self.ctrl.focused_tracks()
+        c = self.sources.collection(key)
+        if c is not None:
+            return self.ctrl.library.collection_tracks(c)
         return sorted(self.ctrl.library.all_tracks, key=lambda t: (t.artist.casefold(), t.title.casefold()))
+
+    def _header_menu(self, pos) -> None:
+        m = QMenu(self)
+        for i, name in enumerate(COLS):
+            if i == C_POS:
+                continue
+            a = m.addAction(name)
+            a.setCheckable(True)
+            a.setChecked(not self.table.isColumnHidden(i))
+            a.toggled.connect(lambda on, i=i: (self.table.setColumnHidden(i, not on), self._save_cfg()))
+        m.exec(self.table.horizontalHeader().mapToGlobal(pos))
+
+    def _update_count(self) -> None:
+        shown, total = self.proxy.rowCount(), self.model.rowCount()
+        done = sum(1 for r in range(total) if self.model.item(r, C_STRUCT).text())
+        self.count.setText((f"{shown} of {total}" if shown != total else f"{total} tracks") + f" · {done} analyzed")
 
     def refresh(self) -> None:
         if not self._dirty and self.model.rowCount():
             return
         self._dirty = False
+        if self._sources_dirty:
+            self._sources_dirty = False
+            self._populate_sources()
         keep = self.current.location if self.current else None
         self.tracks = self._source_tracks()
         index = self.store.index()
         notation = self.ctrl.settings.key_notation
         self.model.setRowCount(0)
-        is_set = self.source.currentData() == "set"
+        is_set = self.focus_key == SET_KEY
         for i, t in enumerate(self.tracks):
             row = index.get(t.location)
             st = self.status.get(t.location) or ("analyzed" if row else "")
             if row and self.store.needs_analysis(t.location, row.analyzer.split("==")[0]) and not self.status.get(t.location):
                 st = "file changed"
-            vals = [str(i + 1) if is_set else "", t.artist, t.title, f"{t.bpm:.1f}" if t.bpm else "?",
-                    format_key(t.key, notation), row.summary if row else "", st]
-            sorts = [i, t.artist.casefold(), t.title.casefold(), t.bpm or 0, str(t.key or "~"),
+            dur = f"{int(t.duration // 60)}:{int(t.duration % 60):02d}" if t.duration else ""
+            vals = [str(i + 1) if is_set else "", t.artist, t.title, t.genre, f"{t.bpm:.1f}" if t.bpm else "?",
+                    format_key(t.key, notation), dur, row.summary if row else "", st]
+            sorts = [i, t.artist.casefold(), t.title.casefold(), t.genre.casefold(), t.bpm or 0,
+                     (t.key.mode, t.key.number) if t.key else ("Z", 99), t.duration or 0,
                      row.summary if row else "~", st]
             items = []
             for v, srt in zip(vals, sorts):
@@ -400,9 +509,10 @@ class PhrasesView(QWidget):
                 it.setData(srt, SORT_ROLE)
                 items.append(it)
             self._style_status(items[-1], st)
-            items[5].setToolTip("I Intro · B Build · D Drop · Br Breakdown · G Groove · O Outro (bars)")
+            items[C_STRUCT].setToolTip("I Intro · B Build · D Drop · Br Breakdown · G Groove · O Outro (bars)")
             self.model.appendRow(items)
-        self.table.setColumnHidden(0, not is_set)
+        self.table.setColumnHidden(C_POS, not is_set)
+        self._update_count()
         if keep:
             self._select_path(keep)
         elif self.tracks and not self.table.currentIndex().isValid():
@@ -565,6 +675,7 @@ class PhrasesView(QWidget):
         for t in tracks:
             self.store.delete(t.location)
         self.ctrl.refresh_structure_index()
+        self._populate_sources()
         self._dirty = True
         self.refresh()
         self._row_changed(self.table.currentIndex())
@@ -645,6 +756,7 @@ class PhrasesView(QWidget):
         self.analyze_all_btn.setEnabled(True)
         self.bar.hide()
         self.ctrl.refresh_structure_index()
+        self._populate_sources()
         self._dirty = True
         self.refresh()
         fails = f", {len(self._errors)} failed (hover the status for why)" if self._errors else ""
@@ -671,11 +783,14 @@ class PhrasesView(QWidget):
         CueExportDialog(self, tracks).exec()
 
     def _save_cfg(self) -> None:
-        self.ctrl.config.set("phrases", {"source": self.source.currentData(), "split": self.split.sizes()})
+        self.ctrl.config.set("phrases", {
+            "source": list(self.focus_key), "split": self.split.sizes(),
+            "hidden_cols": [i for i in range(1, len(COLS)) if self.table.isColumnHidden(i)],
+        })
 
     def restore(self) -> None:
         sizes = (self.ctrl.config.get("phrases", {}) or {}).get("split")
-        if sizes:
+        if sizes and len(sizes) == 3:
             self.split.setSizes(sizes)
 
 

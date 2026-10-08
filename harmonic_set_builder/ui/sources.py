@@ -1,7 +1,7 @@
 """Mixxx-style sources tree: Library, Crates and Playlists with track counts."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
@@ -9,14 +9,17 @@ from PySide6.QtWidgets import QMenu, QTreeWidget, QTreeWidgetItem
 from ..data.mixxx_db import Collection, Library, visible_playlists
 
 LIBRARY_KEY = ("library", 0)
+SET_KEY = ("set", 0)
+CURRENT_SET = "current-set"  # emitted by ``focused`` for the "Current set" item
 
 
 class SourcesTree(QTreeWidget):
-    focused = Signal(object)  # Collection | None (whole library)
+    focused = Signal(object)  # Collection | None (whole library) | CURRENT_SET
     openAsSet = Signal(object)  # Collection
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, set_item: bool = False):
         super().__init__(parent)
+        self.set_item = set_item  # offer "Current set" above the library
         self.setHeaderHidden(True)
         self.setRootIsDecorated(True)
         self.setExpandsOnDoubleClick(False)  # a single click on a heading folds it
@@ -27,18 +30,29 @@ class SourcesTree(QTreeWidget):
         self._focus_item: Optional[QTreeWidgetItem] = None
         self._expanded = {"crates": True, "playlists": True}
 
-    def populate(self, lib: Library, show_history: bool, show_autodj: bool, focus: Optional[tuple]) -> None:
-        for key, item in (("crates", self._crates_item()), ("playlists", self._playlists_item())):
+    def populate(self, lib: Library, show_history: bool, show_autodj: bool, focus: Optional[tuple],
+                 count: Callable[[Sequence[int]], str] = lambda ids: str(len(ids)),
+                 set_ids: Sequence[int] = ()) -> None:
+        """``count`` labels each source from its track ids (e.g. "40 · 12 ✓")."""
+        for key in ("crates", "playlists"):
+            item = self._heading(key)
             if item is not None:
                 self._expanded[key] = item.isExpanded()
         self.blockSignals(True)  # rebuilding: no focus changes, no stale items
         self._focus_item = None
         self.clear()
         self._collections = {}
-        lib_item = QTreeWidgetItem([f"Library ({len(lib.tracks)})"])
+        selected = None
+        if self.set_item:
+            set_it = QTreeWidgetItem([f"Current set ({count(list(set_ids))})"])
+            set_it.setData(0, Qt.UserRole, SET_KEY)
+            self.addTopLevelItem(set_it)
+            if focus == SET_KEY:
+                selected = set_it
+        lib_item = QTreeWidgetItem([f"Library ({count(list(lib.tracks))})"])
         lib_item.setData(0, Qt.UserRole, LIBRARY_KEY)
         self.addTopLevelItem(lib_item)
-        selected = lib_item
+        selected = selected or lib_item
         for name, key, items in (
             ("Crates", "crates", lib.crates),
             ("Playlists", "playlists", visible_playlists(lib, show_history, show_autodj)),
@@ -48,7 +62,7 @@ class SourcesTree(QTreeWidget):
             head.setFlags(Qt.ItemIsEnabled)
             self.addTopLevelItem(head)
             for c in items:
-                it = QTreeWidgetItem([f"{c.name} ({len(c.track_ids)})"])
+                it = QTreeWidgetItem([f"{c.name} ({count(c.track_ids)})"])
                 k = (c.kind, c.id)
                 it.setData(0, Qt.UserRole, k)
                 self._collections[k] = c
@@ -60,11 +74,15 @@ class SourcesTree(QTreeWidget):
         self.setCurrentItem(selected)
         self.blockSignals(False)
 
-    def _crates_item(self):
-        return self.topLevelItem(1) if self.topLevelItemCount() > 1 else None
+    def _heading(self, key: str) -> Optional[QTreeWidgetItem]:
+        for i in range(self.topLevelItemCount()):
+            it = self.topLevelItem(i)
+            if it.data(0, Qt.UserRole) == ("header", key):
+                return it
+        return None
 
-    def _playlists_item(self):
-        return self.topLevelItem(2) if self.topLevelItemCount() > 2 else None
+    def focus_key(self) -> tuple:
+        return tuple(self._focus_item.data(0, Qt.UserRole)) if self._focus_item else LIBRARY_KEY
 
     def collection(self, key) -> Optional[Collection]:
         return self._collections.get(tuple(key)) if key else None
@@ -97,7 +115,8 @@ class SourcesTree(QTreeWidget):
         if sel and sel[0] is not self._focus_item:
             self._focus_item = sel[0]
             key = tuple(sel[0].data(0, Qt.UserRole))
-            self.focused.emit(None if key == LIBRARY_KEY else self._collections.get(key))
+            self.focused.emit(CURRENT_SET if key == SET_KEY else
+                              None if key == LIBRARY_KEY else self._collections.get(key))
             return
         if self._focus_item is None or self._focus_item in self.selectedItems():
             return
