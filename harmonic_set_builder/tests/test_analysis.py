@@ -117,7 +117,7 @@ def edm_file(tmp_path_factory):
 def test_builtin_finds_the_synthetic_structure(edm_file):
     job = pipeline.Job(str(edm_file), track_id=7, bpm=edm.BPM, grid={"bpm": edm.BPM, "first_beat": 0.3, "beats": None})
     a = TrackAnalysis.from_dict(pipeline.analyze(job)["analysis"])
-    got = [(s.label, s.start_bar, s.end_bar) for s in a.sections]
+    got = [(s.label, s.start_bar, s.end_bar) for s in labels.whole(a.sections)]
     want = edm.expected_bounds()
     assert [g[0] for g in got] == [w[0] for w in want]
     assert [g[1] for g in got] == [w[1] for w in want]
@@ -131,7 +131,7 @@ def test_builtin_finds_the_synthetic_structure(edm_file):
 def test_builtin_without_a_mixxx_grid_still_finds_sections(edm_file):
     a = TrackAnalysis.from_dict(pipeline.analyze(pipeline.Job(str(edm_file), bpm=edm.BPM))["analysis"])
     assert a.grid == "detected"
-    assert [s.label for s in a.sections] == [w[0] for w in edm.expected_bounds()]
+    assert [s.label for s in labels.whole(a.sections)] == [w[0] for w in edm.expected_bounds()]
 
 
 # Real allin1 1.1.0 output for tests/edm.py (2026-10-08): good boundaries, pop-style labels.
@@ -271,7 +271,7 @@ def test_phrase_grid_offset_from_a_pickup_bar():
     assert [round(s.start_sec, 1) for s in drops] == [32.4, 122.4]  # on allin1's boundaries, not a bar early
     # allin1's phrase changes inside the drops are kept as parts, where DJs put cues
     parts = [round(s.start_sec, 1) for s in secs if s.label == DROP and s.part > 1]
-    assert parts == [47.4, 62.4, 137.4, 152.4]
+    assert parts == [47.4, 62.4, 137.4, 152.4, 167.4]
     assert all((s.start_bar - 1) % 8 == 0 for s in secs[1:] if s.label != BUILD)
 
 
