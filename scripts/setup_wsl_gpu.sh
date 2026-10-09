@@ -57,9 +57,12 @@ echo "== CUE-DETR (GPU)"
 C="$DATA/tools/cue-detr-venv"
 python3.11 -m venv "$C"
 "$C/bin/pip" install -q -U pip
-"$C/bin/pip" install -q torch==2.4.1 $TORCH_CUDA
-"$C/bin/pip" install -q numpy==1.26.4 transformers==4.42.3 timm==1.0.7 librosa==0.10.2.post1 matplotlib==3.9.1 \
-  scipy==1.14.0 pillow==10.4.0
+# torchvision must match torch 2.4.1, or timm pulls the newest one, which replaces torch with a build
+# for a newer CUDA than the driver supports (torch.cuda.is_available() then says False).
+"$C/bin/pip" install -q torch==2.4.1 torchvision==0.19.1 $TORCH_CUDA
+printf 'torch==2.4.1\ntorchvision==0.19.1\n' > /tmp/hsb-torch-pins.txt
+"$C/bin/pip" install -q -c /tmp/hsb-torch-pins.txt numpy==1.26.4 transformers==4.42.3 timm==1.0.7 \
+  librosa==0.10.2.post1 matplotlib==3.9.1 scipy==1.14.0 pillow==10.4.0 $TORCH_CUDA --extra-index-url https://pypi.org/simple
 
 echo "== checks"
 "$A/bin/python" -W ignore -c "import torch, natten, allin1; assert torch.cuda.is_available(); print('allin1 on', torch.cuda.get_device_name(0))"
