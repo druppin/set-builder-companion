@@ -19,11 +19,15 @@ DJ_LABELS = (INTRO, BUILD, DROP, BREAKDOWN, GROOVE, OUTRO)
 MODEL, DERIVED, MANUAL = "model", "derived", "manual"
 # Bump when the labeling rules change: older results get re-labeled from the cached
 # model output (fast; allin1 isn't re-run).
-LABELS_VERSION = 3
+LABELS_VERSION = 4
 LABELS_TAG = f"+labels{LABELS_VERSION}"
 
 DROP_ENERGY = 0.55  # chorus at or above this mean energy is a Drop
 BODY_DROP_ENERGY = 0.7  # verse/inst/solo this energetic with the kick in is a Drop too
+# ...and either way only within DROP_MARGIN of the track's loudest section: a 0.8 groove
+# isn't a drop in a track whose drops sit at 0.95.
+DROP_MARGIN = 0.12
+SILENT = 0.15  # a stretch this quiet is a breakdown, not (the start of) a build
 BREAK_ENERGY = 0.5  # break/bridge below this (or without kick) is a Breakdown
 EDGE_ENERGY = 0.6  # Groove before the first / after the last Drop below this joins Intro / Outro
 PHRASE = 8  # bars; boundaries within SNAP_BARS of a multiple snap onto it
@@ -99,9 +103,8 @@ def raw_phrase_offset(raw: RawStructure, bars: np.ndarray) -> int:
     return phrase_offset([nearest_bar(s["start"], bars) for s in _segments(raw)[1:]])
 
 
-def _raw_bounds(raw: RawStructure, bars: np.ndarray) -> list[tuple[int, str]]:
+def _raw_bounds(raw: RawStructure, bars: np.ndarray, offset: int) -> list[tuple[int, str]]:
     """(start bar, raw label) per segment, snapped to the track's phrase grid."""
-    offset = raw_phrase_offset(raw, bars)
     out: list[tuple[int, str]] = []
     for s in _segments(raw):
         b = 0 if not out else snap_bar(s["start"], bars, offset)
@@ -111,29 +114,32 @@ def _raw_bounds(raw: RawStructure, bars: np.ndarray) -> list[tuple[int, str]]:
     return out
 
 
-def _map(label: str, e: float, kick: float) -> str:
+def _map(label: str, e: float, kick: float, top: float = 0.0) -> str:
+    """``top``: the track's loudest section energy (drops are judged relative to it)."""
+    drop_level = max(DROP_ENERGY, top - DROP_MARGIN)
+    body_level = max(BODY_DROP_ENERGY, top - DROP_MARGIN)
     if label == "intro":
         return INTRO
     if label == "outro":
         return OUTRO
     if label == "chorus":
-        return DROP if e >= DROP_ENERGY else GROOVE
+        return DROP if e >= drop_level else GROOVE
     if label in ("break", "bridge"):
         return BREAKDOWN if e < BREAK_ENERGY or kick < 0.5 else GROOVE
     # verse / inst / solo (and start/end): energy and the kick decide
-    if e >= BODY_DROP_ENERGY and kick >= 0.7:
+    if e >= body_level and kick >= 0.7:
         return DROP
     if kick < 0.4 and e < BREAK_ENERGY:
         return BREAKDOWN
     return GROOVE
 
 
-def _edges_only(raw_labels: list[str], energy: list[float], kick: list[float]) -> list[str]:
+def _edges_only(raw_labels: list[str], energy: list[float], kick: list[float], top: float = 0.0) -> list[str]:
     """allin1 often calls half a dance track "intro" (or "outro"). Only a leading run
     counts as intro, and it ends at the first drop-level segment; likewise outro
     only counts after the last one. Elsewhere those labels are treated as "inst"."""
     out = list(raw_labels)
-    body = [_map("inst", e, k) for e, k in zip(energy, kick)]
+    body = [_map("inst", e, k, top) for e, k in zip(energy, kick)]
     first_drop = next((i for i, b in enumerate(body) if b == DROP), len(out))
     last_drop = max((i for i, b in enumerate(body) if b == DROP), default=-1)
     for i, lab in enumerate(out):
@@ -150,14 +156,38 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
         return []
     bars = f.starts
     kick = kick_present(f).astype(float)
-    bounds = _raw_bounds(raw, bars) or [(0, "inst")]
+    offset = raw_phrase_offset(raw, bars)
+    bounds = _raw_bounds(raw, bars, offset) or [(0, "inst")]
     spans = [(a, (bounds[i + 1][0] if i + 1 < len(bounds) else n), lab) for i, (a, lab) in enumerate(bounds)]
     spans = [(a, b, lab) for a, b, lab in spans if b > a]
     seg_e = [float(f.energy[a:b].mean()) for a, b, _ in spans]
     seg_k = [float(kick[a:b].mean()) for a, b, _ in spans]
-    raw_labels = _edges_only([lab for _, _, lab in spans], seg_e, seg_k)
-    labels = [_map(lab, e, k) for lab, e, k in zip(raw_labels, seg_e, seg_k)]
+    # Second-loudest section: one peak section (a final drop) mustn't push real drops down.
+    loud = sorted((e for (a, b, _), e in zip(spans, seg_e) if b - a >= MIN_BARS), reverse=True)
+    top = loud[1] if len(loud) > 1 else (loud[0] if loud else 0.0)
+    raw_labels = _edges_only([lab for _, _, lab in spans], seg_e, seg_k, top)
+    labels = [_map(lab, e, k, top) for lab, e, k in zip(raw_labels, seg_e, seg_k)]
     sources = [source] * len(spans)
+
+    # A big jump from a quieter section (breakdown, build, intro, quiet groove) with the kick
+    # back in is a drop, even if it opens sparse and so averages below the loudest sections.
+    for i in range(1, len(spans)):
+        a, b, _ = spans[i]
+        loud = float(np.percentile(f.energy[a:b], 75))  # a drop may open with a few sparse bars
+        if labels[i] == GROOVE and labels[i - 1] != DROP and loud >= seg_e[i - 1] + 0.4 and seg_k[i] >= 0.6:
+            labels[i] = DROP
+
+    # Fake drops: the drop hits on the phrase line, pauses for a bar or two, then really
+    # drops. The model marks the late hit; the drop starts on the phrase line.
+    for i in range(1, len(spans)):
+        a, b, lab = spans[i]
+        k = (a - offset) % PHRASE
+        g = a - k
+        if labels[i] == DROP and k in (1, 2) and g - spans[i - 1][0] >= MIN_BARS and \
+                f.energy[g] >= 0.75 * seg_e[i] and min(f.energy[g + 1:a]) < 0.6 * seg_e[i]:
+            pa, _, plab = spans[i - 1]
+            spans[i - 1], spans[i] = (pa, g, plab), (g, b, lab)
+            seg_e[i - 1], seg_e[i] = float(f.energy[pa:g].mean()), float(f.energy[g:b].mean())
 
     # Groove at the edges, quieter than the body, is really intro/outro.
     drops = [i for i, lab in enumerate(labels) if lab in (DROP, BREAKDOWN)]
@@ -183,6 +213,8 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
         drop_e = float(f.energy[b:spans[i + 1][1]].mean())
         if seg_e[i] > drop_e - 0.25:
             continue
+        if b - a > 8 and f.energy[a:a + (b - a) // 2].mean() < SILENT:
+            continue  # breakdown, then (maybe) a build: found below, not the whole span
         signs = build_signs(f, a, b)
         rising = signs["onsets"] or signs["high"] or signs["centroid"]
         # Something must rise (a flat kickless stretch is a breakdown). At the very

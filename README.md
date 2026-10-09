@@ -271,6 +271,16 @@ Defaults from section 9 of the brief are used unless noted.
   kick intro that adds hats isn't mistaken for a build. Otherwise a build is looked for in the last 16/8/4 bars
   before the drop: two of the three rises, a falling or absent low end, a change where it starts (something comes
   in *or* the kick drops out), and a jump in energy or low end at the drop.
+- **Drops are judged against the track itself**: a section counts as a Drop only within 0.12 of the track's
+  second-loudest section (so one peak section can't demote the rest). A loud opening groove is a Groove, not
+  Drop 1 (JOYRYDE – *GOT REAL*). A big jump from a quieter section, measured on its loud bars because a drop
+  can open with a few sparse ones, is a Drop (ACRAZE – *Do It To It*, second drop).
+- **Fake drops**: when the drop hits on a phrase line, pauses a bar or two and then really drops, the drop
+  starts on the phrase line (My Nu Leng – *Worldwide*).
+- A near-silent stretch before a drop is a breakdown, not a build; only the rising end is the build
+  (K Motionz – *Only You*). A build may start a bar or two before the riser, when the kick fades early.
+- These cases are regression tests (`tests/fixtures/real_tracks.json`: per-bar features and allin1 output,
+  no audio), with the DJ's verdicts in the test names.
 - Sections shorter than 4 bars (except builds) merge into a neighbour.
 - Boundaries the model finds *inside* a section (a 32-bar drop changing at bar 16) are kept as **parts**
   ("Drop 1", "Drop 1 b") instead of being merged away: on 10 hand-cued tracks, merging them dropped the share of

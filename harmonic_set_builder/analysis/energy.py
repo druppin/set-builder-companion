@@ -186,7 +186,10 @@ def detect_build(f: BarFeatures, boundary: int, seg_start: int) -> Optional[int]
         win = slice(a, boundary)
         rising = sum(_rising(x[win]) for x in (f.onsets, f.high, f.centroid))
         low_ok = _slope(f.low[win]) <= 0.005 or kick[win].mean() < 0.5
-        if rising >= 2 and low_ok and (a == seg_start or _step_change(f, a)):
+        quiet_start = w >= 8 and f.energy[a:a + w // 2].mean() < 0.15  # breakdown, not build (labels.SILENT)
+        # The kick sometimes fades a bar or two before the riser starts.
+        changed = a == seg_start or any(_step_change(f, x) for x in (a, a - 1, a - 2) if x >= seg_start)
+        if rising >= 2 and low_ok and changed and not quiet_start:
             return a
     return None
 

@@ -254,10 +254,11 @@ def _real(name):
     """Stored per-bar features plus allin1's raw output for a track from the library
     (2026-10-08). No audio: kick presence comes from the normalized low band."""
     d = REAL[name]
-    b = {k: np.asarray(v, dtype=float) for k, v in d["bars"].items()}
-    n = len(b["energy"])
-    f = BarFeatures(b["start_sec"], np.append(b["start_sec"][1:], d["duration"]), b["rms"], b["low"], b["high"],
-                    b["centroid"], b["onsets"], b["energy"], np.zeros((n, 25)), b["low"] * 30 - 40)
+    from harmonic_set_builder.analysis.energy import from_bars
+
+    cols = d["bars"]
+    bars = [{k: cols[k][i] for k in cols} for i in range(len(cols["energy"]))]
+    f = from_bars(bars, d["duration"])  # uses the stored kick/bass level when the fixture has it
     raw = structure.RawStructure("allin1==1.1.0", segments=d["allin1_segments"])
     return labels.to_sections(raw, f, d["duration"]), raw, f
 
@@ -270,8 +271,8 @@ def test_phrase_grid_offset_from_a_pickup_bar():
     assert [round(s.start_sec, 1) for s in drops] == [32.4, 122.4]  # on allin1's boundaries, not a bar early
     # allin1's phrase changes inside the drops are kept as parts, where DJs put cues
     parts = [round(s.start_sec, 1) for s in secs if s.label == DROP and s.part > 1]
-    assert parts == [47.4, 62.4, 137.4, 152.4, 167.4]
-    assert all((s.start_bar - 1) % 8 == 0 for s in secs[1:])
+    assert parts == [47.4, 62.4, 137.4, 152.4]
+    assert all((s.start_bar - 1) % 8 == 0 for s in secs[1:] if s.label != BUILD)
 
 
 def test_builds_before_drops_on_real_tracks():
@@ -398,3 +399,45 @@ def test_method_views_from_stored_data():
     cands = [[30.0, 0.9], [30.1, 0.8], [30.2, 0.7]]
     assert [round(p) for p in methods.build("cuedetr", a, {"candidates": cands}).points] == [30]
     assert methods.build("saved", a, None).sections == a.sections
+
+
+# DJ feedback on these tracks (2026-10-09): what the rules must get right.
+def _names(secs):
+    return [(s.name, s.start_bar + 1) for s in secs]
+
+
+def test_got_real_groove_before_the_first_real_drop():
+    # JOYRYDE - GOT REAL: the loud opening is intro + groove; the first real build ends at
+    # bar 37, where the first real drop hits (a one-bar gap before it).
+    secs, _, _ = _real("got_real")
+    w = labels.whole(secs)
+    first_drop = next(s for s in w if s.label == DROP)
+    assert first_drop.start_bar + 1 == 37
+    assert [s.label for s in w if s.start_bar < 36][:2] == [INTRO, GROOVE]
+    assert any(s.label == BUILD and s.end_bar + 1 == 37 for s in w)
+
+
+def test_worldwide_fake_drop_and_build_in_the_groove():
+    # My Nu Leng - Worldwide: the drop hits on bar 145, pauses a bar, then really drops at
+    # 147; the drop starts at 145. The stretch before it is a build.
+    secs, _, _ = _real("worldwide")
+    w = labels.whole(secs)
+    drops = [s.start_bar + 1 for s in w if s.label == DROP]
+    assert drops == [65, 145]
+    assert any(s.label == BUILD and s.end_bar + 1 == 145 for s in w)
+
+
+def test_krazka_stays_as_it_was():
+    # KRAZKA - ПЫХ ПЫХ: confirmed correct before the rule changes.
+    secs, _, _ = _real("krazka")
+    assert _names(secs) == [("Build 1", 1), ("Drop 1", 9), ("Drop 1 b", 25), ("Build 2", 41), ("Drop 2", 49),
+                            ("Drop 2 b", 65), ("Groove", 73)]
+
+
+def test_do_it_to_it_second_drop_opens_sparse():
+    # The second drop opens with three sparse bars; it's still the drop, after a full 8-bar build.
+    secs, _, _ = _real("do_it_to_it")
+    w = labels.whole(secs)
+    b2 = [s for s in w if s.label == BUILD][1]
+    assert (round(b2.start_sec, 1), b2.bars) == (62.9, 8)
+    assert next(s for s in w if s.start_bar == b2.end_bar).label == DROP
