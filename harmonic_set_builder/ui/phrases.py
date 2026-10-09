@@ -156,6 +156,7 @@ class StructurePlot(pg.PlotWidget):
         self.playhead.hide()
         pi.addItem(self.playhead, ignoreBounds=True)
         self._items = []
+        self._cue_items = []
         self.scene().sigMouseClicked.connect(self._clicked)
 
     def show_analysis(self, a: Optional[TrackAnalysis]) -> None:
@@ -187,6 +188,24 @@ class StructurePlot(pg.PlotWidget):
             pi.addItem(it)
             self._items.append(it)
         pi.setXRange(0, a.duration, padding=0.01)
+
+    def show_cues(self, cues: list[dict], duration: float = 0.0) -> None:
+        """Your hot cues from Mixxx as dashed lines numbered like Mixxx's pads, to compare with the sections."""
+        pi = self.getPlotItem()
+        for it in self._cue_items:
+            pi.removeItem(it)
+        self._cue_items = []
+        for c in cues:
+            num = c["hotcue"] + 1
+            text = f"{num} {c['label']}" if c["label"] else str(num)
+            colour = QColor((c.get("color") or 0xFFFFFF) & 0xFFFFFF) if c.get("color") else QColor("#ffffff")
+            line = pg.InfiniteLine(c["start"], angle=90, pen=pg.mkPen(colour, width=1.5, style=Qt.DashLine),
+                                   label=text, labelOpts={"position": 0.06, "color": colour, "anchors": [(0, 1), (0, 1)]})
+            line.setToolTip(f"Your hot cue {text} at {fmt_time(c['start'])}")
+            pi.addItem(line, ignoreBounds=True)
+            self._cue_items.append(line)
+        if cues and not self._items and duration:
+            pi.setXRange(0, duration, padding=0.01)
 
     def set_playhead(self, sec: Optional[float]) -> None:
         if sec is None:
@@ -344,7 +363,8 @@ class PhrasesView(QWidget):
         self.plot.seek.connect(self._seek)
         legend = QLabel("  ".join(f"<span style='color:{c.name()}'>■</span> {lab}" for lab, c in SECTION_COLORS.items())
                         + "   <span style='color:#e08c1a'>━</span> energy   "
-                          "<span style='color:#6a6a8a'>┅</span> kick/bass   · click to play from there")
+                          "<span style='color:#6a6a8a'>┅</span> kick/bass   ┆ your Mixxx hot cues"
+                          "   · click to play from there")
         legend.setObjectName("hint")
 
         self.sections = QTableWidget(0, 6)
@@ -559,6 +579,7 @@ class PhrasesView(QWidget):
             self.title.setText("Pick a track")
             self.info.clear()
             self.plot.show_analysis(None)
+            self.plot.show_cues([])
             self._update_tabs()
             return
         self.title.setText(f"{t.artist} – {t.title}" if t.artist else t.title)
@@ -570,6 +591,7 @@ class PhrasesView(QWidget):
             st = self.status.get(t.location, "")
             self.info.setText(st if st else "Not analyzed yet: press “Analyze selected”.")
         self.plot.show_analysis(a)
+        self.plot.show_cues(self._hot_cues(t), (a.duration if a else 0.0) or t.duration)
         self._playhead(self.preview.player.position())
         self.sections.setRowCount(len(a.sections) if a else 0)
         for r, s in enumerate(a.sections if a else []):
@@ -580,6 +602,18 @@ class PhrasesView(QWidget):
                     it.setForeground(SECTION_COLORS.get(s.label, theme.TEXT))
                 self.sections.setItem(r, c, it)
         self._update_tabs()
+
+    def _hot_cues(self, t: Track) -> list[dict]:
+        """The track's hot cues as of the last library snapshot (never read from Mixxx's live DB)."""
+        snap = self.ctrl.snapshot_path
+        if t.id < 0 or not snap.is_file():
+            return []
+        try:
+            cues = mixxx_db.load_cues(snap, [t.id]).get(t.id, [])
+        except Exception:  # noqa: BLE001 - an odd snapshot just means no overlay
+            return []
+        return sorted((c for c in cues if c["type"] == mixxx_cues.HOTCUE and c["start"] is not None),
+                      key=lambda c: c["start"])
 
     # --------------------------------------------------- transitions/flow
     def _set_neighbours(self) -> tuple[Optional[Track], Optional[Track]]:

@@ -218,14 +218,15 @@ def load_cues(snapshot_path: Path, track_ids) -> dict[int, list[dict]]:
     try:
         for i in range(0, len(ids), 500):
             chunk = ids[i:i + 500]
-            q = ("SELECT c.track_id, c.type, c.position, c.length, c.hotcue, c.label, l.samplerate FROM cues c "
+            q = ("SELECT c.track_id, c.type, c.position, c.length, c.hotcue, c.label, l.samplerate, c.color FROM cues c "
                  "JOIN library l ON l.id = c.track_id WHERE c.track_id IN (" + ",".join("?" * len(chunk)) + ")")
-            for tid, ctype, pos, length, hot, label, sr in conn.execute(q, chunk):
+            for tid, ctype, pos, length, hot, label, sr, color in conn.execute(q, chunk):
                 if not sr:
                     continue
                 k = 2.0 * sr  # positions are stereo samples
                 out[tid].append({"type": int(ctype), "start": pos / k if pos >= 0 else None,
-                                 "length": (length or 0) / k, "hotcue": int(hot), "label": label or ""})
+                                 "length": (length or 0) / k, "hotcue": int(hot), "label": label or "",
+                                 "color": int(color) if color is not None else None})
     finally:
         conn.close()
     return out

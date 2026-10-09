@@ -26,4 +26,6 @@ fi
 
 OUT="$HOME/.local/share/HarmonicSetBuilder/Harmonic Set Builder/benchmark/latest.json"
 cp "$OUT" "$DRIVE/hsb-benchmark-desktop.json"
-echo "Copied the results to the drive as hsb-benchmark-desktop.json"
+cp "${OUT%.json}.html" "$DRIVE/hsb-benchmark-desktop.html"
+echo "Copied the results to the drive: hsb-benchmark-desktop.json and hsb-benchmark-desktop.html"
+echo "Open the .html in Windows (double-click it on the drive) to see each track's cues."

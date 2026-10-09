@@ -22,7 +22,7 @@ from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Optional
 
-from .analysis import batch, benchmark, labels, pipeline, structure
+from .analysis import batch, benchmark, benchmark_report, labels, pipeline, structure
 from .analysis.store import AnalysisStore, TrackAnalysis
 from .analysis.structure import ALLIN1, BUILTIN, allin1_available
 from .core.track import Track
@@ -337,8 +337,11 @@ def cmd_benchmark(env: Env, a) -> int:
     print("\n" + text)
     out = Path(a.out or env.data_dir / "benchmark" / "latest.json")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"scores": [s.__dict__ for s in scores], "tracks": report}, indent=1), encoding="utf-8")
-    print(f"\nDetails: {out}")
+    data = {"scores": [s.__dict__ for s in scores], "tracks": report}
+    out.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    page = out.with_suffix(".html")
+    benchmark_report.write(page, data, METHOD_NAMES)
+    print(f"\nDetails: {out}\nTimelines: {page}")
     return 0
 
 
