@@ -209,6 +209,28 @@ def load_grids(snapshot_path: Path, track_ids) -> dict[int, dict]:
     return out
 
 
+def load_cues(snapshot_path: Path, track_ids) -> dict[int, list[dict]]:
+    """Cues of these tracks from the snapshot, in seconds: {"type", "start", "length", "hotcue", "label"}
+    (type 1 = hot cue, 6 = intro, 7 = outro; see data/mixxx_cues.py)."""
+    ids = list(track_ids)
+    out: dict[int, list[dict]] = {i: [] for i in ids}
+    conn = sqlite3.connect(snapshot_path)
+    try:
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ("SELECT c.track_id, c.type, c.position, c.length, c.hotcue, c.label, l.samplerate FROM cues c "
+                 "JOIN library l ON l.id = c.track_id WHERE c.track_id IN (" + ",".join("?" * len(chunk)) + ")")
+            for tid, ctype, pos, length, hot, label, sr in conn.execute(q, chunk):
+                if not sr:
+                    continue
+                k = 2.0 * sr  # positions are stereo samples
+                out[tid].append({"type": int(ctype), "start": pos / k if pos >= 0 else None,
+                                 "length": (length or 0) / k, "hotcue": int(hot), "label": label or ""})
+    finally:
+        conn.close()
+    return out
+
+
 def visible_playlists(lib: Library, show_history: bool, show_autodj: bool) -> list[Collection]:
     out = []
     for p in lib.playlists:

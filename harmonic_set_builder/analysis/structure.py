@@ -148,6 +148,38 @@ def allin1_available(python: Optional[str]) -> tuple[bool, str]:
     return True, "allin1 ready"
 
 
+def _run_worker(worker: Path, args: list[str], python: str, timeout: float) -> dict:
+    with tempfile.TemporaryDirectory(prefix="hsb-worker-") as work:
+        out = os.path.join(work, "result.json")
+        try:
+            r = subprocess.run([python, str(worker), args[0], out, *[a.replace("{work}", work) for a in args[1:]]],
+                               capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            raise Allin1Error(f"{worker.stem} timed out after {timeout:.0f} s") from e
+        if r.returncode != 0 or not os.path.isfile(out):
+            lines = [x for x in r.stderr.strip().splitlines() if "Warning" not in x and "@custom" not in x]
+            raise Allin1Error(lines[-1] if lines else f"{worker.stem} failed (exit {r.returncode})")
+        with open(out, encoding="utf-8") as fh:
+            return json.load(fh)
+
+
+def run_allin1_models(path: str, python: str, models: list[str], timeout: float = 3600) -> tuple[dict, dict]:
+    """Several allin1 models on one source separation. Returns ({model: RawStructure dict}, timing)."""
+    d = _run_worker(WORKER, [path, "{work}", ",".join(models)], python, timeout)
+    timing = d.pop("timing", {})
+    if len(models) == 1:
+        return {models[0]: d}, timing
+    return d, timing
+
+
+CUEDETR_WORKER = Path(__file__).with_name("cuedetr_worker.py")
+
+
+def run_cuedetr(path: str, python: str, timeout: float = 1800) -> dict:
+    """CUE-DETR cue point estimates: {"cues": [s], "candidates": [[s, score]]}."""
+    return _run_worker(CUEDETR_WORKER, [path], python, timeout)
+
+
 def run_allin1(path: str, python: str, timeout: float = 1800) -> RawStructure:
     """Analyze one file in the external allin1 environment."""
     with tempfile.TemporaryDirectory(prefix="hsb-allin1-") as work:

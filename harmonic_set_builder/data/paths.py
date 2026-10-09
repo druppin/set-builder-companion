@@ -19,6 +19,11 @@ def app_dirs() -> tuple[Path, Path]:
             Path(QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)))
 
 
+def default_cuedetr_python(data_dir: Path) -> Path:
+    venv = Path(data_dir) / "tools" / "cue-detr-venv"
+    return venv / ("Scripts/python.exe" if sys.platform.startswith("win") else "bin/python")
+
+
 def default_allin1_python(data_dir: Path) -> Path:
     venv = Path(data_dir) / "allin1-venv"
     return venv / ("Scripts/python.exe" if sys.platform.startswith("win") else "bin/python")

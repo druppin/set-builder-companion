@@ -4,6 +4,7 @@
     hsb show TRACK
     hsb export-cues [--dry-run] [--tracks ...] [--replace-own] [--max-hotcues N]
     hsb validate --sample 20 [--out FILE.csv]
+    hsb benchmark --sample 10 [--methods builtin,allin1,raveform,cuedetr]
 
 Reads Mixxx's library through the same read-only snapshot as the app. Only
 ``export-cues`` without ``--dry-run`` writes to Mixxx, with every safety rule in
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import random
 import sys
@@ -20,13 +22,13 @@ from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Optional
 
-from .analysis import batch, labels
+from .analysis import batch, benchmark, labels, pipeline, structure
 from .analysis.store import AnalysisStore, TrackAnalysis
 from .analysis.structure import ALLIN1, BUILTIN, allin1_available
 from .core.track import Track
 from .data import mixxx_cues, mixxx_db
 from .data.config import Config
-from .data.paths import app_dirs, default_allin1_python
+from .data.paths import app_dirs, default_allin1_python, default_cuedetr_python
 
 
 def _fmt(sec: float) -> str:
@@ -229,6 +231,111 @@ def cmd_validate(env: Env, a) -> int:
     return 0
 
 
+def _pick_with_cues(env: Env, n: int, min_cues: int, seed: int) -> list[Track]:
+    """Up to ``n`` tracks with at least ``min_cues`` hand-placed hot cues, spread across genres."""
+    lib = env.library
+    cues = mixxx_db.load_cues(env.snapshot, list(lib.tracks))
+    rng = random.Random(seed)
+    by_genre: dict[str, list[Track]] = {}
+    for t in lib.all_tracks:
+        hot = [c for c in cues.get(t.id, []) if c["type"] == mixxx_cues.HOTCUE and c["start"] is not None]
+        if len(hot) >= min_cues and t.location and os.path.isfile(t.location):
+            by_genre.setdefault((t.genre or "?").strip().casefold(), []).append(t)
+    for v in by_genre.values():
+        rng.shuffle(v)
+    out: list[Track] = []
+    genres = sorted(by_genre, key=lambda g: -len(by_genre[g]))
+    while len(out) < n and any(by_genre[g] for g in genres):
+        for g in genres:
+            if by_genre[g] and len(out) < n:
+                out.append(by_genre[g].pop())
+    return out
+
+
+METHOD_NAMES = {
+    "builtin": "Built-in (my rules)",
+    "allin1:raw": "allin1 pop model, raw boundaries",
+    "allin1": "allin1 pop model + my rules",
+    "raveform:raw": "allin1 Raveform v1 (EDM), raw boundaries",
+    "raveform": "allin1 Raveform v1 + my rules",
+    "cuedetr": "CUE-DETR cue points (authors' threshold)",
+    "cuedetr:clustered": "CUE-DETR, clustered candidates",
+}
+
+
+def cmd_benchmark(env: Env, a) -> int:
+    """Run every method on tracks you've hand-cued in Mixxx and score them against your hot cues."""
+    _guard_mixxx(a.allow_while_mixxx_runs)
+    methods = a.methods.split(",")
+    env.library  # noqa: B018 - takes the snapshot the cue and grid reads below use
+    if a.tracks:
+        tracks = [t for q in a.tracks for t in env.find(q) if t.id >= 0]
+    else:
+        tracks = _pick_with_cues(env, a.sample, a.min_cues, a.seed)
+    if not tracks:
+        sys.exit("No tracks with enough hot cues found (is the music drive mounted?).")
+    cues = mixxx_db.load_cues(env.snapshot, [t.id for t in tracks])
+    grids = mixxx_db.load_grids(env.snapshot, [t.id for t in tracks])
+    a1_python, cd_python = env.allin1_python(), str(default_cuedetr_python(env.data_dir))
+    report, items = [], {k: [] for k in METHOD_NAMES}
+    for n, t in enumerate(tracks, 1):
+        refs = sorted(c["start"] for c in cues[t.id] if c["type"] == mixxx_cues.HOTCUE and c["start"] is not None)
+        bar = 240.0 / t.bpm if t.bpm else 2.0
+        sig = batch.file_signature(t.location)
+        print(f"[{n}/{len(tracks)}] {t.display}: {len(refs)} hot cues", flush=True)
+        entry = {"track": t.display, "genre": t.genre, "bpm": t.bpm, "path": t.location, "hot_cues": refs,
+                 "methods": {}, "timing": {}}
+        job = lambda backend, raw=None: pipeline.Job(t.location, t.id, t.bpm, grids.get(t.id), backend, a1_python, raw)  # noqa: E731
+
+        def sections(raw):
+            an = pipeline.analyze(job("allin1", raw))["analysis"]
+            return [s for s in an["sections"]]
+
+        if "builtin" in methods:
+            secs = pipeline.analyze(job("builtin"))["analysis"]["sections"]
+            entry["methods"]["builtin"] = [(s["start_sec"], s["label"]) for s in secs]
+        want = [m for m in ("allin1", "raveform") if m in methods]
+        model_of = {"allin1": "harmonix-all", "raveform": "raveform-fold3"}
+        raws = {m: env.store.raw_get(t.location, m, sig) for m in want}
+        missing = [m for m in want if raws[m] is None]
+        if missing:
+            try:
+                got, timing = structure.run_allin1_models(t.location, a1_python, [model_of[m] for m in missing])
+                entry["timing"]["allin1"] = timing
+                print(f"     allin1 timing: {timing}", flush=True)
+                for m in missing:
+                    raws[m] = got[model_of[m]]
+                    env.store.raw_put(t.location, m, sig, raws[m])
+            except structure.Allin1Error as e:
+                print(f"     allin1 failed: {e}")
+        for m in want:
+            if raws.get(m):
+                entry["methods"][f"{m}:raw"] = [(s["start"], s["label"], s.get("probs")) for s in raws[m]["segments"]]
+                entry["methods"][m] = [(s["start_sec"], s["label"]) for s in sections(raws[m])]
+        if "cuedetr" in methods:
+            raw = env.store.raw_get(t.location, "cuedetr", sig)
+            if raw is None:
+                try:
+                    raw = structure.run_cuedetr(t.location, cd_python)
+                    env.store.raw_put(t.location, "cuedetr", sig, raw)
+                except structure.Allin1Error as e:
+                    print(f"     CUE-DETR failed: {e}")
+            if raw:
+                entry["methods"]["cuedetr"] = [(c, "cue") for c in raw["cues"]]
+                entry["methods"]["cuedetr:clustered"] = [(c, "cue") for c in benchmark.cluster_candidates(raw["candidates"])]
+        for k, preds in entry["methods"].items():
+            items[k].append((refs, [p[0] for p in preds if p[0] > 0.01], bar))
+        report.append(entry)
+    scores = [benchmark.score(METHOD_NAMES[k], v) for k, v in items.items() if v]
+    text = benchmark.table(scores)
+    print("\n" + text)
+    out = Path(a.out or env.data_dir / "benchmark" / "latest.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"scores": [s.__dict__ for s in scores], "tracks": report}, indent=1), encoding="utf-8")
+    print(f"\nDetails: {out}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="hsb", description="Harmonic Set Builder phrase analysis.")
     p.add_argument("--mixxx-db", help="path to mixxxdb.sqlite")
@@ -265,11 +372,20 @@ def main(argv=None) -> int:
     va.add_argument("--force", action="store_true")
     va.add_argument("--allow-while-mixxx-runs", action="store_true")
 
+    be = sub.add_parser("benchmark", help="score every analyzer against your hand-placed Mixxx hot cues")
+    be.add_argument("--sample", type=int, default=10)
+    be.add_argument("--tracks", nargs="+", help="paths, ids or 'Artist - Title' parts instead of a sample")
+    be.add_argument("--min-cues", type=int, default=3, help="only tracks with at least this many hot cues")
+    be.add_argument("--methods", default="builtin,allin1,raveform,cuedetr")
+    be.add_argument("--seed", type=int, default=7)
+    be.add_argument("--out")
+    be.add_argument("--allow-while-mixxx-runs", action="store_true")
+
     a = p.parse_args(argv)
     env = Env(a.mixxx_db)
     try:
         return {"analyze": cmd_analyze, "show": cmd_show, "export-cues": cmd_export_cues,
-                "validate": cmd_validate}[a.cmd](env, a)
+                "validate": cmd_validate, "benchmark": cmd_benchmark}[a.cmd](env, a)
     finally:
         env.store.close()
 

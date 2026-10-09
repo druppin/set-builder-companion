@@ -311,3 +311,23 @@ def test_status_and_relabel_keep_the_original_backend(tmp_path):
     assert not jobs and skipped[0][1] == "already analyzed"
     jobs, _ = batch.make_jobs([Track(1, location=str(f))], {}, st, "builtin", force=True)
     assert jobs[0].backend == "builtin" and jobs[0].raw is None
+
+
+# ------------------------------------------------------------- benchmark
+def test_benchmark_match_and_score():
+    from harmonic_set_builder.analysis import benchmark
+
+    refs = [0.0, 30.0, 60.0, 90.0]  # the cue at 0:00 doesn't count
+    m = benchmark.match(refs, [30.2, 61.0, 75.0], 0.5)
+    assert (m.refs, m.preds, m.hits, m.used) == (3, 3, 1, 1)
+    s = benchmark.score("x", [(refs, [30.2, 61.0, 75.0], 1.875)])
+    assert round(s.recall_half_sec, 2) == 0.33 and round(s.recall_bar, 2) == 0.67
+    assert s.median_error == pytest.approx(0.6)
+    assert "Your cues found" in benchmark.table([s])
+
+
+def test_cluster_cuedetr_candidates():
+    from harmonic_set_builder.analysis import benchmark
+
+    cands = [[30.2, 0.7], [30.3, 0.9], [30.35, 0.8], [61.0, 0.95], [90.0, 0.65], [90.1, 0.62], [90.2, 0.7]]
+    assert [round(t, 1) for t in benchmark.cluster_candidates(cands)] == [30.3, 90.1]  # 61.0 is a lone window

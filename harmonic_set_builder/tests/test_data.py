@@ -169,3 +169,21 @@ def test_tracklist_text():
     a, b = tr(1, "8A"), tr(2, "9A")
     text = export.tracklist_text([a, b], [None, relate(a, b, Settings())])
     assert text.splitlines()[1] == " 2. Artist2 – T2 9A  [9A, 128.0 BPM]  +1"
+
+
+def test_load_cues_in_seconds(tmp_path):
+    p = tmp_path / "snap.sqlite"
+    c = sqlite3.connect(p)
+    c.executescript("CREATE TABLE library (id INTEGER PRIMARY KEY, samplerate INTEGER);"
+                    "CREATE TABLE cues (id INTEGER PRIMARY KEY, track_id INTEGER, type INTEGER, position REAL,"
+                    " length REAL, hotcue INTEGER, label TEXT, color INTEGER);"
+                    "INSERT INTO library VALUES (1, 44100);"
+                    "INSERT INTO cues VALUES (1, 1, 1, 88200, 0, 0, 'drop', 0);"
+                    "INSERT INTO cues VALUES (2, 1, 7, -1, 441000, -1, '', 0);")
+    c.commit()
+    c.close()
+    cues = mixxx_db.load_cues(p, [1, 2])
+    assert cues[2] == []
+    hot, outro = sorted(cues[1], key=lambda x: x["type"])
+    assert (hot["type"], hot["start"], hot["hotcue"], hot["label"]) == (1, 1.0, 0, "drop")
+    assert outro["start"] is None and outro["length"] == 5.0
