@@ -144,7 +144,8 @@ On Windows use `py -3.11` and `Scripts\pip.exe`; the same pins apply (not yet tr
 
 ### Benchmark: which analyzer works on your music
 
-`hsb benchmark --sample 10` picks 10 tracks (across genres) on which you've placed at least 3 hot cues in
+`hsb benchmark --tracks-file benchmark/testset.txt` runs the DJ's test set (21 tracks they know well; the desktop
+script uses it by default). `hsb benchmark --sample 10` instead picks 10 tracks (across genres) on which you've placed at least 3 hot cues in
 Mixxx, runs every analyzer on them, and reports how many of *your* cues each one finds within 0.5 s and within
 one bar: the built-in rules, allin1's pop model (raw and with the rules), allin1's unlisted EDM checkpoint
 *Raveform v1* (raw and with the rules) and CUE-DETR (ETH Zurich, ISMIR 2024; the authors' threshold and
@@ -276,7 +277,10 @@ Defaults from section 9 of the brief are used unless noted.
   Drop 1 (JOYRYDE – *GOT REAL*). A big jump from a quieter section, measured on its loud bars because a drop
   can open with a few sparse ones, is a Drop (ACRAZE – *Do It To It*, second drop).
 - **Fake drops**: when the drop hits on a phrase line, pauses a bar or two and then really drops, the drop
-  starts on the phrase line (My Nu Leng – *Worldwide*).
+  starts on the phrase line (My Nu Leng – *Worldwide*). When the tease is longer, a short "drop" between two
+  builds, it's labeled a build too (kept visible as a part of the build).
+- **Cooldown at the end**: a final section that steps clearly down from the drop before it is a Groove
+  (KRAZKA – *ПЫХ ПЫХ*); silence after the music ends doesn't count against the last section (Ship Wrek – *Shake That*).
 - A near-silent stretch before a drop is a breakdown, not a build; only the rising end is the build
   (K Motionz – *Only You*). A build may start a bar or two before the riser, when the kick fades early.
 - These cases are regression tests (`tests/fixtures/real_tracks.json`: per-bar features and allin1 output,

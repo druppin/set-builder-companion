@@ -269,6 +269,29 @@ def _pick_with_cues(env: Env, n: int, min_cues: int, seed: int) -> list[Track]:
     return out
 
 
+def _read_testset(env: Env, path: Path) -> list[Track]:
+    """Tracks named in a test-set file: "Artist - Title" (exact, else unique substring) or a path."""
+    lib = env.library
+    out: list[Track] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        q = line.strip()
+        if not q or q.startswith("#"):
+            continue
+        if q.startswith("/") or ":\\" in q:
+            t = lib.by_location(q)
+            hits = [t] if t else []
+        else:
+            hits = [t for t in lib.all_tracks if t.display.casefold() == q.casefold()] or \
+                   [t for t in lib.all_tracks if q.casefold() in t.display.casefold()]
+        if not hits:
+            print(f"test set: not in the library: {q}")
+        elif len(hits) > 1:
+            print(f"test set: {len(hits)} tracks match {q!r}; using {hits[0].location} (list it by path to choose)")
+        if hits:
+            out.append(hits[0])
+    return out
+
+
 METHOD_NAMES = {
     "builtin": "Built-in (my rules)",
     "allin1:raw": "allin1 pop model, raw boundaries",
@@ -285,7 +308,9 @@ def cmd_benchmark(env: Env, a) -> int:
     _guard_mixxx(a.allow_while_mixxx_runs)
     methods = a.methods.split(",")
     env.library  # noqa: B018 - takes the snapshot the cue and grid reads below use
-    if a.tracks:
+    if a.tracks_file:
+        tracks = _read_testset(env, Path(a.tracks_file))
+    elif a.tracks:
         tracks = [t for q in a.tracks for t in env.find(q) if t.id >= 0]
     else:
         tracks = _pick_with_cues(env, a.sample, a.min_cues, a.seed)
@@ -413,6 +438,7 @@ def main(argv=None) -> int:
     be = sub.add_parser("benchmark", help="score every analyzer against your hand-placed Mixxx hot cues")
     be.add_argument("--sample", type=int, default=10)
     be.add_argument("--tracks", nargs="+", help="paths, ids or 'Artist - Title' parts instead of a sample")
+    be.add_argument("--tracks-file", help="a test-set file, e.g. benchmark/testset.txt")
     be.add_argument("--min-cues", type=int, default=3, help="only tracks with at least this many hot cues")
     be.add_argument("--methods", default="builtin,allin1,raveform,cuedetr")
     be.add_argument("--seed", type=int, default=7)

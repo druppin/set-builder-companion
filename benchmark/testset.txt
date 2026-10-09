@@ -1,0 +1,24 @@
+# Benchmark test set: tracks the DJ knows well. One per line: "Artist - Title" as Mixxx shows it,
+# or an absolute path when a title is in the library twice. Lines starting with # are ignored.
+# Ground truth: the hot cues placed in Mixxx (tracks without hot cues are analyzed but not scored).
+ALRT - The Fat boy - Original Mix
+Biscits - Don't Stop
+GHENGAR / Izzy Vadim - HOOLIGANS
+JOYRYDE / Mika Means - GOT REAL
+/run/media/druppin/A861-EA64/Music/KRAZKA/ПЫХ ПЫХ (2026)/ПЫХ ПЫХ.mp3
+Ship Wrek - Shake That
+Jauz - Don't Leave Me
+longstoryshort - LET’S GET ILL
+Wa-Fu - Stutter
+Wa-Fu - Swear
+Wa-Fu / Sailor Goon - Attitude
+Gray - One Spliff
+Invadhertz / LaMeduza - Nourishing Souls
+Borgore / Abella Danger - 911
+Habstrakt - The Sound
+FISHER / Kita Alexander - Atmosphere
+DJ Blyatman / Russian Village Boys - Made in Russia
+HOLY PRIEST / Lil Texas - Like A Boss
+HOLY PRIEST / Manji - No Balance
+HOLY PRIEST / elMefti / FACELESS - Fuck This
+Rooler - DISCOTEK

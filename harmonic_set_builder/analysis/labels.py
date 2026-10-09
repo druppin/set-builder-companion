@@ -160,7 +160,11 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
     bounds = _raw_bounds(raw, bars, offset) or [(0, "inst")]
     spans = [(a, (bounds[i + 1][0] if i + 1 < len(bounds) else n), lab) for i, (a, lab) in enumerate(bounds)]
     spans = [(a, b, lab) for a, b, lab in spans if b > a]
-    seg_e = [float(f.energy[a:b].mean()) for a, b, _ in spans]
+    # Silence after the music ends shouldn't drag the last section's energy down.
+    tail = n
+    while tail > 1 and f.energy[tail - 1] < 0.05:
+        tail -= 1
+    seg_e = [float(f.energy[a:min(b, tail)].mean()) if a < tail else 0.0 for a, b, _ in spans]
     seg_k = [float(kick[a:b].mean()) for a, b, _ in spans]
     # Second-loudest section: one peak section (a final drop) mustn't push real drops down.
     loud = sorted((e for (a, b, _), e in zip(spans, seg_e) if b - a >= MIN_BARS), reverse=True)
@@ -176,6 +180,12 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
         loud = float(np.percentile(f.energy[a:b], 75))  # a drop may open with a few sparse bars
         if labels[i] == GROOVE and labels[i - 1] != DROP and loud >= seg_e[i - 1] + 0.4 and seg_k[i] >= 0.6:
             labels[i] = DROP
+
+    # The track winding down: a final section that steps clearly down from the drop before
+    # it is a groove (a cooldown), not more drop.
+    last = len(spans) - 1
+    if last > 0 and labels[last] == DROP and labels[last - 1] == DROP and seg_e[last] < seg_e[last - 1] - 0.15:
+        labels[last] = GROOVE
 
     # Fake drops: the drop hits on the phrase line, pauses for a bar or two, then really
     # drops. The model marks the late hit; the drop starts on the phrase line.
@@ -237,7 +247,7 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
                 with_builds.append((s, b, BUILD, DERIVED))
                 continue
         with_builds.append((a, b, lab, src))
-    merged = _absorb_short(_merge(with_builds))
+    merged = _absorb_short(_merge(_teases(with_builds)))
     # Merging same-label neighbours above keeps the labels clean, but the boundaries the
     # model found inside them (a long drop changing at its 16-bar phrase) are exactly where
     # DJs cue. Keep them as parts of the section.
@@ -249,11 +259,22 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
     out = []
     for a, b, lab, src in merged:
         counts[lab] = counts.get(lab, 0) + 1
-        for part, (pa, pb) in enumerate(_split(a, b, cuts if lab != BUILD else []), 1):
+        for part, (pa, pb) in enumerate(_split(a, b, cuts), 1):
             out.append(Section(
                 lab, counts[lab], pa, pb, 0.0 if pa == 0 else float(bars[pa]), float(ends[pb - 1]),
                 round(float(f.energy[pa:pb].mean()), 4), src, total.get(lab, 0) > 1, part,
             ))
+    return out
+
+
+def _teases(spans: list[tuple[int, int, str, str]]) -> list[tuple[int, int, str, str]]:
+    """A short "drop" between two builds is a tease: the music says drop, then builds again
+    before the real one. Label it a build too (it stays visible as a part of the build)."""
+    out = list(spans)
+    for i in range(1, len(out) - 1):
+        a, b, lab, _src = out[i]
+        if lab == DROP and b - a <= 8 and out[i - 1][2] == BUILD and out[i + 1][2] == BUILD:
+            out[i] = (a, b, BUILD, DERIVED)
     return out
 
 

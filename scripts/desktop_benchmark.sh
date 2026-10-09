@@ -22,7 +22,9 @@ if [ ! -e "$LAPTOP_ROOT" ]; then
   sudo ln -s "$DRIVE" "$LAPTOP_ROOT"
 fi
 
-.venv/bin/hsb --mixxx-db "$DRIVE/mixxxdb.sqlite" benchmark --sample 10 "$@"
+# The DJ's test set (benchmark/testset.txt); pass --sample 10 instead for a random pick of hand-cued tracks.
+if [ $# -eq 0 ]; then set -- --tracks-file benchmark/testset.txt; fi
+.venv/bin/hsb --mixxx-db "$DRIVE/mixxxdb.sqlite" benchmark "$@"
 
 OUT="$HOME/.local/share/HarmonicSetBuilder/Harmonic Set Builder/benchmark/latest.json"
 cp "$OUT" "$DRIVE/hsb-benchmark-desktop.json"

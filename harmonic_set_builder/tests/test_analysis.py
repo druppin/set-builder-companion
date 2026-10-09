@@ -441,3 +441,19 @@ def test_do_it_to_it_second_drop_opens_sparse():
     b2 = [s for s in w if s.label == BUILD][1]
     assert (round(b2.start_sec, 1), b2.bars) == (62.9, 8)
     assert next(s for s in w if s.start_bar == b2.end_bar).label == DROP
+
+
+def test_shake_that_is_all_correct():
+    # Ship Wrek - Shake That: confirmed correct; the last drop runs to the end (trailing
+    # silence after the music doesn't make it a groove).
+    secs, _, _ = _real("shake_that")
+    assert _names(secs) == [("Breakdown 1", 1), ("Build 1", 13), ("Drop 1", 21), ("Drop 1 b", 29), ("Drop 1 c", 37),
+                            ("Drop 1 d", 45), ("Breakdown 2", 53), ("Build 2", 61), ("Drop 2", 69), ("Drop 2 b", 77),
+                            ("Drop 2 c", 85)]
+
+
+def test_tease_between_builds_is_a_build():
+    spans = [(0, 16, BUILD, "derived"), (16, 24, DROP, "model"), (24, 32, BUILD, "derived"), (32, 64, DROP, "model")]
+    assert [s[2] for s in labels._teases(spans)] == [BUILD, BUILD, BUILD, DROP]
+    long_drop = [(0, 16, BUILD, "d"), (16, 48, DROP, "m"), (48, 56, BUILD, "d"), (56, 64, DROP, "m")]
+    assert labels._teases(long_drop) == long_drop  # a real 32-bar drop isn't a tease
