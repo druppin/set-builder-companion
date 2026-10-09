@@ -142,6 +142,27 @@ NATTEN_CUDA_ARCH="" "$D/bin/pip" install --no-build-isolation natten==0.17.1   #
 
 On Windows use `py -3.11` and `Scripts\pip.exe`; the same pins apply (not yet tried there).
 
+### Benchmark: which analyzer works on your music
+
+`hsb benchmark --sample 10` picks 10 tracks (across genres) on which you've placed at least 3 hot cues in
+Mixxx, runs every analyzer on them, and reports how many of *your* cues each one finds within 0.5 s and within
+one bar: the built-in rules, allin1's pop model (raw and with the rules), allin1's unlisted EDM checkpoint
+*Raveform v1* (raw and with the rules) and CUE-DETR (ETH Zurich, ISMIR 2024; the authors' threshold and
+clustered candidates). Model outputs are cached in `analysis.sqlite`, so re-scoring is instant. Details go to
+`<app data>/benchmark/latest.json`. On a laptop CPU it takes about 15–20 minutes per track (allin1's source
+separation and 8-model pop ensemble dominate); on an NVIDIA GPU, well under a minute.
+
+### Running the heavy models on a Windows PC with an NVIDIA GPU (WSL2)
+
+1. **Windows**: Windows 10 21H2 or newer (`winver`), a current NVIDIA driver, then in an administrator
+   PowerShell: `wsl --install -d Ubuntu-22.04` and reboot. Open *Ubuntu* from the Start menu and create a user.
+2. **Ubuntu**: `git clone https://github.com/druppin/set-builder-companion && cd set-builder-companion`
+   then `bash scripts/setup_wsl_gpu.sh` (once; 30–60 min, mostly compiling NATTEN for the GPU).
+3. **Music**: plug in the music drive. With Mixxx closed on the laptop, copy `~/.mixxx/mixxxdb.sqlite` to the
+   top of the drive first. In Ubuntu, `ls /mnt` shows the drive letters.
+4. **Run**: `bash scripts/desktop_benchmark.sh d` (use the drive's letter). It points the laptop's paths at the
+   drive, runs the benchmark on the GPU and copies the results to the drive as `hsb-benchmark-desktop.json`.
+
 ### Cue export safety
 
 The only code that writes to Mixxx's database is `data/mixxx_cues.py`, and only when you confirm a write:
