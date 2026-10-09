@@ -155,7 +155,7 @@ separation and 8-model pop ensemble dominate); on an NVIDIA GPU, well under a mi
 ### Running the heavy models on a Windows PC with an NVIDIA GPU (WSL2)
 
 1. **Windows**: Windows 10 21H2 or newer (`winver`), a current NVIDIA driver, then in an administrator
-   PowerShell: `wsl --install -d Ubuntu-22.04` and reboot. Open *Ubuntu* from the Start menu and create a user.
+   PowerShell: `wsl --install` and reboot (Ubuntu 22.04 or 24.04 both work). Open *Ubuntu* from the Start menu and create a user.
 2. **Ubuntu**: `git clone https://github.com/druppin/set-builder-companion && cd set-builder-companion`
    then `bash scripts/setup_wsl_gpu.sh` (once; 30–60 min, mostly compiling NATTEN for the GPU).
 3. **Music**: plug in the music drive. With Mixxx closed on the laptop, copy `~/.mixxx/mixxxdb.sqlite` to the

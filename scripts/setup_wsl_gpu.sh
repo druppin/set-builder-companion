@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time setup on a Windows PC with an NVIDIA GPU, inside WSL2 Ubuntu 22.04.
+# One-time setup on a Windows PC with an NVIDIA GPU, inside WSL2 Ubuntu (22.04 or 24.04).
 # Installs: the app (for the `hsb` command), allin1 with CUDA, and CUE-DETR with CUDA.
 # Run from the repository folder:  bash scripts/setup_wsl_gpu.sh
 # Takes 30-60 minutes, most of it compiling NATTEN for the GPU.
@@ -20,18 +20,20 @@ if ! command -v python3.11 >/dev/null; then
   sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
 fi
 
-# CUDA compiler (only needed to build NATTEN). The WSL repo has no driver package, by design.
-if [ ! -x /usr/local/cuda-12.1/bin/nvcc ]; then
+# CUDA compiler and headers only (to build NATTEN): the full cuda-toolkit package also pulls in
+# Nsight, which needs libtinfo5 and can't install on Ubuntu 24.04. CUDA 12.4 accepts 24.04's
+# GCC 13 (12.1 doesn't). The WSL repo has no driver package, by design: Windows provides it.
+if [ ! -x /usr/local/cuda-12.4/bin/nvcc ]; then
   wget -q https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
   sudo dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
   sudo apt-get update
-  sudo apt-get install -y cuda-toolkit-12-1
+  sudo apt-get install -y cuda-nvcc-12-4 cuda-cudart-dev-12-4 cuda-libraries-dev-12-4 cuda-cccl-12-4
 fi
-export CUDA_HOME=/usr/local/cuda-12.1
+export CUDA_HOME=/usr/local/cuda-12.4
 export PATH="$CUDA_HOME/bin:$PATH"
 
 DATA="$HOME/.local/share/HarmonicSetBuilder/Harmonic Set Builder"
-TORCH_CUDA="--index-url https://download.pytorch.org/whl/cu121"
+TORCH_CUDA="--index-url https://download.pytorch.org/whl/cu124"  # matches the CUDA 12.4 compiler
 
 echo "== app"
 python3.11 -m venv .venv
