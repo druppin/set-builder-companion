@@ -1,0 +1,2 @@
+# Shell scripts run in WSL/Linux: keep LF even when cloned with Windows git
+*.sh text eol=lf
