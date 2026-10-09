@@ -28,7 +28,8 @@ def executor(workers: int) -> ProcessPoolExecutor:
 
 
 def make_jobs(tracks: Iterable[Track], grids: dict[int, dict], store: AnalysisStore, backend: str,
-              allin1_python: Optional[str] = None, force: bool = False, relabel: bool = False
+              allin1_python: Optional[str] = None, force: bool = False, relabel: bool = False,
+              compare: tuple = (), cuedetr_python: Optional[str] = None
               ) -> tuple[list[Job], list[tuple[Track, str]]]:
     """Jobs for tracks that need (re-)analysis, plus (track, reason) for those skipped.
 
@@ -37,6 +38,8 @@ def make_jobs(tracks: Iterable[Track], grids: dict[int, dict], store: AnalysisSt
       backend that made the result (seconds; allin1 isn't re-run, and an allin1
       result isn't replaced just because Built-in is selected)
     * ``force``: analyze from scratch with ``backend``
+    * ``compare``: also save "raveform" / "cuedetr" output for the method picker (a
+      current result missing one of them gets just that added)
     """
     jobs, skipped = [], []
     for t in tracks:
@@ -45,17 +48,20 @@ def make_jobs(tracks: Iterable[Track], grids: dict[int, dict], store: AnalysisSt
             continue
         status = store.status(t.location)
         use, raw = backend, None
+        sig = file_signature(t.location)
+        extra = {k: v for k in compare if (v := store.raw_get(t.location, k, sig)) is not None}
         if not force:
-            if status == "current" and not relabel:
+            if status == "current" and not relabel and len(extra) == len(compare):
                 skipped.append((t, "already analyzed"))
                 continue
             if status in ("current", "outdated"):
                 use = store.backend_of(t.location) or backend
-            raw = store.raw_get(t.location, use, file_signature(t.location))
+            raw = store.raw_get(t.location, use, sig)
             if raw is None and use == ALLIN1 and status in ("current", "outdated"):
                 skipped.append((t, "no cached allin1 output to re-label (re-analyze from scratch instead)"))
                 continue
-        jobs.append(Job(t.location, t.id, t.bpm, grids.get(t.id), use, allin1_python, raw))
+        jobs.append(Job(t.location, t.id, t.bpm, grids.get(t.id), use, allin1_python, raw,
+                        tuple(compare), extra if not force else {}, cuedetr_python))
     return jobs, skipped
 
 
@@ -63,4 +69,6 @@ def store_result(store: AnalysisStore, result: dict) -> TrackAnalysis:
     a = TrackAnalysis.from_dict(result["analysis"])
     store.save(a)
     store.raw_put(a.track_path, result["backend"], a.file_hash, result["raw"])
+    for k, data in (result.get("extra_raw") or {}).items():
+        store.raw_put(a.track_path, k, a.file_hash, data)
     return a

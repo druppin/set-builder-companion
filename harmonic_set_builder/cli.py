@@ -22,7 +22,7 @@ from concurrent.futures import as_completed
 from pathlib import Path
 from typing import Optional
 
-from .analysis import batch, benchmark, benchmark_report, labels, pipeline, structure
+from .analysis import batch, benchmark, benchmark_report, labels, pipeline, structure, transfer
 from .analysis.store import AnalysisStore, TrackAnalysis
 from .analysis.structure import ALLIN1, BUILTIN, allin1_available
 from .core.track import Track
@@ -80,13 +80,14 @@ def _guard_mixxx(allow: bool) -> None:
 
 
 def run_analysis(env: Env, tracks: list[Track], backend: str, force: bool, relabel: bool, workers: int,
-                 quiet: bool = False) -> dict[str, TrackAnalysis]:
+                 quiet: bool = False, compare: tuple = ()) -> dict[str, TrackAnalysis]:
     if backend == ALLIN1 and not relabel:
         ok, msg = allin1_available(env.allin1_python())
         if not ok:
             sys.exit(f"allin1 is not available: {msg}")
     grids = mixxx_db.load_grids(env.snapshot, [t.id for t in tracks]) if env.snapshot else {}
-    jobs, skipped = batch.make_jobs(tracks, grids, env.store, backend, env.allin1_python(), force, relabel)
+    jobs, skipped = batch.make_jobs(tracks, grids, env.store, backend, env.allin1_python(), force, relabel,
+                                    compare, str(default_cuedetr_python(env.data_dir)))
     for t, why in skipped:
         if why != "already analyzed" and not quiet:
             print(f"skip  {t.display}: {why}")
@@ -123,7 +124,23 @@ def cmd_analyze(env: Env, a) -> int:
         tracks = tracks[: a.limit]
     backend = a.backend or env.settings.analysis_backend
     workers = a.jobs or env.settings.analysis_workers or batch.default_workers(backend)
-    run_analysis(env, tracks, backend, a.force, a.relabel, workers)
+    compare = tuple(x for x in (a.compare or "").split(",") if x)
+    run_analysis(env, tracks, backend, a.force, a.relabel, workers, compare=compare)
+    return 0
+
+
+def cmd_export_analysis(env: Env, a) -> int:
+    n = transfer.export(env.store, Path(a.out))
+    print(f"Exported {n} analyzed track(s) to {a.out}")
+    return 0
+
+
+def cmd_import_analysis(env: Env, a) -> int:
+    path_map = dict(m.split("=", 1) for m in (a.map or []))
+    r = transfer.import_file(env.store, Path(a.file), path_map)
+    print(f"Imported {r.imported} track(s); kept {r.kept_newer} newer local result(s).")
+    for p in r.size_mismatch[:20]:
+        print(f"  skipped (file differs from the one analyzed): {p}")
     return 0
 
 
@@ -359,6 +376,7 @@ def main(argv=None) -> int:
     an.add_argument("--backend", choices=[BUILTIN, ALLIN1])
     an.add_argument("--jobs", type=int, help="worker processes")
     an.add_argument("--allow-while-mixxx-runs", action="store_true")
+    an.add_argument("--compare", help="also save these for comparison: raveform,cuedetr")
 
     sh = sub.add_parser("show", help="print a track's sections and energy")
     sh.add_argument("track", help="path, Mixxx track id, or part of 'Artist - Title'")
@@ -381,6 +399,12 @@ def main(argv=None) -> int:
     va.add_argument("--force", action="store_true")
     va.add_argument("--allow-while-mixxx-runs", action="store_true")
 
+    xa = sub.add_parser("export-analysis", help="write all analysis results to a file (for another machine)")
+    xa.add_argument("out", help="e.g. /mnt/e/hsb-analysis.json.gz")
+    ia = sub.add_parser("import-analysis", help="load analysis results exported on another machine")
+    ia.add_argument("file")
+    ia.add_argument("--map", nargs="+", help="path prefix rewrites, FROM=TO")
+
     be = sub.add_parser("benchmark", help="score every analyzer against your hand-placed Mixxx hot cues")
     be.add_argument("--sample", type=int, default=10)
     be.add_argument("--tracks", nargs="+", help="paths, ids or 'Artist - Title' parts instead of a sample")
@@ -394,7 +418,8 @@ def main(argv=None) -> int:
     env = Env(a.mixxx_db)
     try:
         return {"analyze": cmd_analyze, "show": cmd_show, "export-cues": cmd_export_cues,
-                "validate": cmd_validate, "benchmark": cmd_benchmark}[a.cmd](env, a)
+                "validate": cmd_validate, "benchmark": cmd_benchmark,
+                "export-analysis": cmd_export_analysis, "import-analysis": cmd_import_analysis}[a.cmd](env, a)
     finally:
         env.store.close()
 

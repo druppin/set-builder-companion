@@ -78,6 +78,19 @@ def file_signature(path: str) -> str:
     return f"{st.st_mtime_ns}:{st.st_size}"
 
 
+SIZE_PREFIX = "size:"  # imported results: the other machine's mtime isn't comparable, the size is
+
+
+def size_hash(size: int) -> str:
+    return f"{SIZE_PREFIX}{size}"
+
+
+def hash_matches(stored: str, signature: str) -> bool:
+    if stored == signature:
+        return True
+    return stored.startswith(SIZE_PREFIX) and stored[len(SIZE_PREFIX):] == signature.rsplit(":", 1)[-1]
+
+
 @dataclass
 class TrackAnalysis:
     track_path: str
@@ -225,7 +238,10 @@ class AnalysisStore:
         if not r:
             return "missing"
         try:
-            changed = r[0] != file_signature(path) or (backend is not None and not r[1].startswith(backend))
+            sig = file_signature(path)
+            if r[0] != sig and hash_matches(r[0], sig):
+                self._adopt(path, sig)
+            changed = not hash_matches(r[0], sig) or (backend is not None and not r[1].startswith(backend))
         except OSError:
             changed = False
         if changed:
@@ -236,7 +252,19 @@ class AnalysisStore:
     def raw_get(self, path: str, backend: str, file_hash: str) -> Optional[dict]:
         r = self.conn.execute("SELECT file_hash, data FROM raw_cache WHERE track_path = ? AND backend = ?",
                               (path, backend)).fetchone()
-        return json.loads(r[1]) if r and r[0] == file_hash else None
+        return json.loads(r[1]) if r and hash_matches(r[0], file_hash) else None
+
+    def raw_backends(self, path: str) -> dict[str, str]:
+        """{backend: file hash} of every cached raw output for this file."""
+        return dict(self.conn.execute("SELECT backend, file_hash FROM raw_cache WHERE track_path = ?", (path,)))
+
+    def _adopt(self, path: str, signature: str) -> None:
+        """An imported (size-keyed) result met its file here: key it by this machine's signature."""
+        with self.conn:
+            self.conn.execute("UPDATE track_analysis SET file_hash = ? WHERE track_path = ? AND file_hash LIKE 'size:%'",
+                              (signature, path))
+            self.conn.execute("UPDATE raw_cache SET file_hash = ? WHERE track_path = ? AND file_hash LIKE 'size:%'",
+                              (signature, path))
 
     def raw_put(self, path: str, backend: str, file_hash: str, data: dict) -> None:
         with self.conn:

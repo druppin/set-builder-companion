@@ -24,6 +24,9 @@ class Job:
     backend: str = BUILTIN
     allin1_python: Optional[str] = None
     raw: Optional[dict] = None  # cached raw output: relabel without re-running the model
+    compare: tuple = ()  # also run these for comparison: "raveform", "cuedetr"
+    extra_raw: Optional[dict] = None  # cached outputs of the comparison models
+    cuedetr_python: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -67,8 +70,18 @@ def analyze(job: Job) -> dict:
     del y
 
     raw: Optional[RawStructure] = RawStructure.from_dict(job.raw) if job.raw else None
-    if raw is None and job.backend == ALLIN1:
-        raw = structure.run_allin1(job.path, job.allin1_python or "")
+    extra = dict(job.extra_raw or {})
+    want_raveform = "raveform" in job.compare and "raveform" not in extra
+    if (raw is None and job.backend == ALLIN1) or want_raveform:
+        models = (["harmonix-all"] if raw is None and job.backend == ALLIN1 else []) + \
+            (["raveform-fold3"] if want_raveform else [])
+        got, _ = structure.run_allin1_models(job.path, job.allin1_python or "", models)
+        if "harmonix-all" in got:
+            raw = RawStructure.from_dict(got["harmonix-all"])
+        if "raveform-fold3" in got:
+            extra["raveform"] = got["raveform-fold3"]
+    if "cuedetr" in job.compare and "cuedetr" not in extra:
+        extra["cuedetr"] = structure.run_cuedetr(job.path, job.cuedetr_python or "")
 
     mgrid = grid_mod.MixxxGrid.from_dict(job.grid)
     beats = grid_mod.grid_beats(mgrid, duration, job.bpm)
@@ -101,4 +114,4 @@ def analyze(job: Job) -> dict:
         bars=[{"bar": i, "start_sec": round(float(f.starts[i]), 4), "energy": round(float(f.energy[i]), 4),
                **{k: round(float(getattr(f, k)[i]), 4) for k in COMPONENTS}} for i in range(len(f))],
     )
-    return {"analysis": a.to_dict(), "raw": raw.to_dict(), "backend": job.backend}
+    return {"analysis": a.to_dict(), "raw": raw.to_dict(), "backend": job.backend, "extra_raw": extra}
