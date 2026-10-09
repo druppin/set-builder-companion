@@ -308,12 +308,12 @@ def cmd_benchmark(env: Env, a) -> int:
                      "methods": {}, "timing": {}}
             job = lambda backend, raw=None: pipeline.Job(t.location, t.id, t.bpm, grids.get(t.id), backend, a1_python, raw)  # noqa: E731
 
-            def sections(raw):
-                an = pipeline.analyze(job("allin1", raw))["analysis"]
-                return [s for s in an["sections"]]
-
+            best = None  # saved as the track's analysis, so the run can be exported and imported
             if "builtin" in methods:
-                secs = pipeline.analyze(job("builtin"))["analysis"]["sections"]
+                res = pipeline.analyze(job("builtin"))
+                env.store.raw_put(t.location, "builtin", sig, res["raw"])
+                best = res
+                secs = res["analysis"]["sections"]
                 entry["methods"]["builtin"] = [(s["start_sec"], s["label"]) for s in secs]
             want = [m for m in ("allin1", "raveform") if m in methods]
             model_of = {"allin1": "harmonix-all", "raveform": "raveform-fold3"}
@@ -332,7 +332,10 @@ def cmd_benchmark(env: Env, a) -> int:
             for m in want:
                 if raws.get(m):
                     entry["methods"][f"{m}:raw"] = [(s["start"], s["label"], s.get("probs")) for s in raws[m]["segments"]]
-                    entry["methods"][m] = [(s["start_sec"], s["label"]) for s in sections(raws[m])]
+                    res = pipeline.analyze(job("allin1", raws[m]))
+                    if m == "allin1":
+                        best = res  # the most accurate on the benchmark
+                    entry["methods"][m] = [(s["start_sec"], s["label"]) for s in res["analysis"]["sections"]]
             if "cuedetr" in methods:
                 raw = env.store.raw_get(t.location, "cuedetr", sig)
                 if raw is None:
@@ -344,6 +347,8 @@ def cmd_benchmark(env: Env, a) -> int:
                 if raw:
                     entry["methods"]["cuedetr"] = [(c, "cue") for c in raw["cues"]]
                     entry["methods"]["cuedetr:clustered"] = [(c, "cue") for c in benchmark.cluster_candidates(raw["candidates"])]
+            if best is not None:
+                batch.store_result(env.store, best)
             for k, preds in entry["methods"].items():
                 items[k].append((refs, [p[0] for p in preds if p[0] > 0.01], bar))
             report.append(entry)

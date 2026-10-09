@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import os
+from pathlib import Path
 from concurrent.futures import Future
 from typing import Optional
 
@@ -17,7 +18,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from ..analysis import batch, transitions
+from ..analysis import batch, methods, transfer, transitions
 from ..analysis.labels import BREAKDOWN, BUILD, DROP, GROOVE, INTRO, OUTRO, summary
 from ..analysis.store import TrackAnalysis
 from ..analysis.structure import ALLIN1, BUILTIN, allin1_available
@@ -26,12 +27,31 @@ from ..core.track import Track
 from ..data import mixxx_cues, mixxx_db
 from ..data.paths import default_allin1_python
 from . import theme
+from .file_dialogs import open_file
 from .sources import SET_KEY, SourcesTree
 
 SECTION_COLORS = {
     INTRO: QColor("#32be44"), BUILD: QColor("#f8d200"), DROP: QColor("#e04040"),
     BREAKDOWN: QColor("#3b6cff"), GROOVE: QColor("#af5ccc"), OUTRO: QColor("#42d4f4"),
 }
+# Raw model labels coloured like the DJ label they usually mean.
+RAW_COLORS = {"intro": INTRO, "outro": OUTRO, "chorus": DROP, "break": BREAKDOWN, "bridge": BREAKDOWN,
+              "verse": GROOVE, "inst": GROOVE, "solo": GROOVE}
+RAVEFORM_PALETTE = ["#8a8a8a", "#8a8a8a", "#32be44", "#42d4f4", "#e8a33a", "#b45cd6", "#3b6cff", "#e04040",
+                    "#f8d200", "#6fd0a0", "#d06f9a"]
+
+
+def section_color(label: str) -> QColor:
+    if label in SECTION_COLORS:
+        return SECTION_COLORS[label]
+    base = label.split(" ")[0]
+    if base in RAW_COLORS:
+        return SECTION_COLORS[RAW_COLORS[base]]
+    if base.startswith("r") and base[1:].isdigit():
+        return QColor(RAVEFORM_PALETTE[int(base[1:]) % len(RAVEFORM_PALETTE)])
+    return QColor(theme.DIM)
+
+
 COLS = ["#", "Artist", "Title", "Genre", "BPM", "Key", "Duration", "Structure", "Status"]
 C_POS, C_STRUCT, C_STATUS = 0, 7, 8
 STATUS_FILTERS = (("all", "All tracks"), ("new", "Not analyzed"), ("analyzed", "Analyzed"),
@@ -159,25 +179,31 @@ class StructurePlot(pg.PlotWidget):
         self._cue_items = []
         self.scene().sigMouseClicked.connect(self._clicked)
 
-    def show_analysis(self, a: Optional[TrackAnalysis]) -> None:
+    def show_analysis(self, a: Optional[TrackAnalysis], sections=None, points=()) -> None:
+        """Energy curve of ``a`` with ``sections`` (default: its own) shaded and ``points`` marked."""
         pi = self.getPlotItem()
         for it in self._items:
             pi.removeItem(it)
         self._items = []
-        if a is None or not a.bars:
-            return
-        for s in a.sections:
-            c = QColor(SECTION_COLORS.get(s.label, theme.DIM))
+        for t in points:
+            line = pg.InfiniteLine(t, angle=90, pen=pg.mkPen(QColor("#5ad0e6"), width=2))
+            line.setToolTip(f"CUE-DETR cue at {fmt_time(t)}")
+            pi.addItem(line, ignoreBounds=True)
+            self._items.append(line)
+        for s in (a.sections if sections is None and a else sections or []):
+            col = section_color(s.label)
+            c = QColor(col)
             c.setAlpha(55)
             region = pg.LinearRegionItem((s.start_sec, s.end_sec), movable=False, brush=pg.mkBrush(c),
-                                         pen=pg.mkPen(SECTION_COLORS.get(s.label, theme.DIM), width=1))
+                                         pen=pg.mkPen(col, width=1))
             region.setZValue(-10)
             pi.addItem(region)
-            label = pg.TextItem(f"{s.name}\n{s.bars} bars", color=SECTION_COLORS.get(s.label, theme.TEXT),
-                                anchor=(0, 0))
+            label = pg.TextItem(f"{s.name}\n{s.bars} bars" if s.bars else s.name, color=col, anchor=(0, 0))
             label.setPos(s.start_sec, 1.17)
             pi.addItem(label)
             self._items += [region, label]
+        if a is None or not a.bars:
+            return
         xs = [b["start_sec"] for b in a.bars] + [a.duration]
         ys = [b["energy"] for b in a.bars]
         low = [b.get("low") or 0 for b in a.bars]
@@ -312,6 +338,9 @@ class PhrasesView(QWidget):
                                    "(dry run first; Mixxx must be closed)")
         self.export_btn.clicked.connect(self._export)
 
+        self.import_btn = QPushButton("Import…")
+        self.import_btn.setToolTip("Load analysis results made on another computer (hsb-analysis.json.gz)")
+        self.import_btn.clicked.connect(self._import)
         top = QHBoxLayout()
         top.addWidget(self.backend)
         top.addWidget(self.analyze_btn)
@@ -319,6 +348,7 @@ class PhrasesView(QWidget):
         top.addWidget(self.stop_btn)
         top.addWidget(self.bar)
         top.addStretch(1)
+        top.addWidget(self.import_btn)
         top.addWidget(self.export_btn)
 
         self.model = QStandardItemModel(0, len(COLS))
@@ -351,6 +381,15 @@ class PhrasesView(QWidget):
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
 
+        self.method = QComboBox()
+        self.method.setToolTip("Compare analyzers on this track: the saved analysis, each model's raw output, "
+                               "each model through the app's rules, and CUE-DETR's cue points")
+        self.method.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.method.setMinimumContentsLength(28)
+        self.method.currentIndexChanged.connect(lambda _i: self._show_method())
+        self.method_note = QLabel()
+        self.method_note.setObjectName("hint")
+        self.view_sections: list = []
         self.title = QLabel("Pick a track")
         f = self.title.font()
         f.setBold(True)
@@ -394,8 +433,13 @@ class PhrasesView(QWidget):
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
-        rv.addWidget(self.title)
+        head = QHBoxLayout()
+        head.addWidget(self.title, 1)
+        head.addWidget(QLabel("Show:"))
+        head.addWidget(self.method)
+        rv.addLayout(head)
         rv.addWidget(self.info)
+        rv.addWidget(self.method_note)
         rv.addWidget(self.plot, 2)
         rv.addWidget(legend)
         rv.addWidget(self.tabs, 2)
@@ -590,18 +634,45 @@ class PhrasesView(QWidget):
         else:
             st = self.status.get(t.location, "")
             self.info.setText(st if st else "Not analyzed yet: press “Analyze selected”.")
-        self.plot.show_analysis(a)
+        keep = self.method.currentData()
+        self.method.blockSignals(True)
+        self.method.clear()
+        for key, title in methods.available(set(self.store.raw_backends(t.location)), a is not None):
+            self.method.addItem(title, key)
+        self.method.setCurrentIndex(max(0, self.method.findData(keep)))
+        self.method.setEnabled(self.method.count() > 1)
+        self.method.blockSignals(False)
+        self._show_method()
+        self._update_tabs()
+
+    def _show_method(self) -> None:
+        """Draw the selected analyzer's prediction for the current track (plus your hot cues)."""
+        t, a = self.current, self.analysis
+        if t is None:
+            return
+        key = self.method.currentData() or methods.SAVED
+        raw = None
+        if key != methods.SAVED:
+            backend = key.split(":")[0]
+            raw = self.store.raw_get(t.location, backend, self.store.raw_backends(t.location).get(backend, ""))
+        view = methods.build(key, a, raw)
+        self.view_sections = view.sections
+        self.method_note.setText(view.note)
+        self.method_note.setVisible(bool(view.note) and key != methods.SAVED)
+        self.plot.show_analysis(a, view.sections, view.points)
         self.plot.show_cues(self._hot_cues(t), (a.duration if a else 0.0) or t.duration)
         self._playhead(self.preview.player.position())
-        self.sections.setRowCount(len(a.sections) if a else 0)
-        for r, s in enumerate(a.sections if a else []):
-            vals = [s.name, fmt_time(s.start_sec), str(s.start_bar + 1), str(s.bars), f"{s.mean_energy:.2f}", s.source]
-            for c, v in enumerate(vals):
+        rows = [(s.name, s.start_sec, str(s.start_bar + 1), str(s.bars), f"{s.mean_energy:.2f}", s.source, s.label)
+                for s in view.sections] + \
+               [(f"Cue {i + 1}", p, "", "", "", "CUE-DETR", "") for i, p in enumerate(view.points)]
+        self.view_starts = [r[1] for r in rows]
+        self.sections.setRowCount(len(rows))
+        for r, (name, start, bar, bars, energy, src, label) in enumerate(rows):
+            for c, v in enumerate((name, fmt_time(start), bar, bars, energy, src)):
                 it = QTableWidgetItem(v)
                 if c == 0:
-                    it.setForeground(SECTION_COLORS.get(s.label, theme.TEXT))
+                    it.setForeground(section_color(label) if label else QColor("#5ad0e6"))
                 self.sections.setItem(r, c, it)
-        self._update_tabs()
 
     def _hot_cues(self, t: Track) -> list[dict]:
         """The track's hot cues as of the last library snapshot (never read from Mixxx's live DB)."""
@@ -687,8 +758,32 @@ class PhrasesView(QWidget):
             self.preview.preview_at(self.current, max(0.0, sec))
 
     def _section_activated(self, row: int, _col: int) -> None:
-        if self.analysis and 0 <= row < len(self.analysis.sections):
-            self.preview.preview_at(self.current, self.analysis.sections[row].start_sec)
+        starts = getattr(self, "view_starts", [])
+        if self.current and 0 <= row < len(starts):
+            self.preview.preview_at(self.current, starts[row])
+
+    def _import(self) -> None:
+        start = "/run/media" if os.path.isdir("/run/media") else os.path.expanduser("~")
+        path = open_file(self, "Import analysis results", start, "Analysis results (*.json.gz)")
+        if not path:
+            return
+        try:
+            r = transfer.import_file(self.store, Path(path))
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Import failed", str(e))
+            return
+        self.ctrl.refresh_structure_index()
+        self._populate_sources()
+        self._dirty = True
+        self.refresh()
+        if self.current:
+            self._row_changed(self.table.currentIndex())
+        msg = f"Imported {r.imported} track(s)."
+        if r.kept_newer:
+            msg += f" Kept {r.kept_newer} newer result(s) already here."
+        if r.size_mismatch:
+            msg += f"\n\n{len(r.size_mismatch)} skipped: the file here differs from the one analyzed."
+        QMessageBox.information(self, "Import", msg)
 
     def _playhead(self, ms: int) -> None:
         t = self.preview.track

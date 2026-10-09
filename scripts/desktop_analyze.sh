@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Analyze the library on the desktop GPU (WSL2) and export the results to the music drive.
 #   bash scripts/desktop_analyze.sh [DRIVE_LETTER] [extra hsb analyze options, e.g. --limit 50]
-# Then on the laptop: hsb import-analysis /run/media/druppin/A861-EA64/hsb-analysis.json.gz
+# Then on the laptop: Phrases view → Import…, or hsb import-analysis /run/media/druppin/A861-EA64/hsb-analysis.json.gz
 set -euo pipefail
 LETTER="${1:-d}"; shift || true
 DRIVE="/mnt/$LETTER"

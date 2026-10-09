@@ -152,6 +152,22 @@ clustered candidates). Model outputs are cached in `analysis.sqlite`, so re-scor
 `<app data>/benchmark/latest.json`. On a laptop CPU it takes about 15–20 minutes per track (allin1's source
 separation and 8-model pop ensemble dominate); on an NVIDIA GPU, well under a minute.
 
+### Comparing analyzers on a track
+
+The Phrases view's **Show:** menu switches the plot and section list between everything saved for the selected
+track: the saved analysis, each model's raw output (allin1's pop labels, Raveform's unnamed EDM labels `r0`–`r10`
+with the model's confidence), each model run through the app's rules (rebuilt from the stored per-bar features,
+no audio needed) and CUE-DETR's cue points. Your Mixxx hot cues stay drawn on top.
+
+### Moving results between computers
+
+`hsb export-analysis FILE.json.gz` writes every analyzed track with all saved model outputs; **Import…** in the
+Phrases view (or `hsb import-analysis FILE`) loads it. Tracks match by path (`--map FROM=TO` rewrites prefixes);
+the file size must match, and results take on this computer's file timestamps the first time the file is seen,
+so a drive moved between Windows and Linux doesn't trigger re-analysis. A more recent local result is kept.
+Both desktop scripts write `hsb-analysis.json.gz` to the music drive: `desktop_analyze.sh` for the library,
+`desktop_benchmark.sh` for the benchmark tracks.
+
 ### Running the heavy models on a Windows PC with an NVIDIA GPU (WSL2)
 
 1. **Windows**: Windows 10 21H2 or newer (`winver`), a current NVIDIA driver, then in an administrator
@@ -160,8 +176,12 @@ separation and 8-model pop ensemble dominate); on an NVIDIA GPU, well under a mi
    then `bash scripts/setup_wsl_gpu.sh` (once; 30–60 min, mostly compiling NATTEN for the GPU).
 3. **Music**: plug in the music drive. With Mixxx closed on the laptop, copy `~/.mixxx/mixxxdb.sqlite` to the
    top of the drive first. In Ubuntu, `ls /mnt` shows the drive letters.
-4. **Run**: `bash scripts/desktop_benchmark.sh d` (use the drive's letter). It points the laptop's paths at the
-   drive, runs the benchmark on the GPU and copies the results to the drive as `hsb-benchmark-desktop.json`.
+4. **Run**: `bash scripts/desktop_analyze.sh d` (use the drive's letter; add `--limit 20` for a first try)
+   analyzes the library on the GPU with allin1 (plus Raveform and CUE-DETR for comparison);
+   `bash scripts/desktop_benchmark.sh d` runs the benchmark. Both point the laptop's paths at the drive and write
+   `hsb-analysis.json.gz` to it; the benchmark also writes `hsb-benchmark-desktop.html` (timelines) and `.json`.
+   A drive plugged in after Ubuntu started isn't in `/mnt`: `sudo mkdir -p /mnt/e && sudo mount -t drvfs E: /mnt/e`.
+5. **Back on the laptop**: Phrases view → **Import…** → `hsb-analysis.json.gz` on the drive.
 
 ### Cue export safety
 

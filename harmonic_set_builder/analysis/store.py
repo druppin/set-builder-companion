@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS bar_energy (
   bar        INTEGER,
   start_sec  REAL,
   energy     REAL,
-  rms REAL, low REAL, high REAL, centroid REAL, onsets REAL,
+  rms REAL, low REAL, high REAL, centroid REAL, onsets REAL, low_db REAL,
   PRIMARY KEY (track_path, bar)
 );
 CREATE TABLE IF NOT EXISTS raw_cache (
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS exported_cues (
 );
 """
 
-BAR_FIELDS = ("energy", "rms", "low", "high", "centroid", "onsets")
+BAR_FIELDS = ("energy", "rms", "low", "high", "centroid", "onsets", "low_db")  # low_db: kick/bass level
 
 
 def file_signature(path: str) -> str:
@@ -150,6 +150,8 @@ class AnalysisStore:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(track_analysis)")}
         if "phrase_offset" not in cols:  # databases from before phrase offsets
             self.conn.execute("ALTER TABLE track_analysis ADD COLUMN phrase_offset INTEGER DEFAULT 0")
+        if "low_db" not in {r[1] for r in self.conn.execute("PRAGMA table_info(bar_energy)")}:
+            self.conn.execute("ALTER TABLE bar_energy ADD COLUMN low_db REAL")
         if "part" not in {r[1] for r in self.conn.execute("PRAGMA table_info(sections)")}:
             self.conn.execute("ALTER TABLE sections ADD COLUMN part INTEGER DEFAULT 1")
         self.conn.commit()
@@ -175,7 +177,8 @@ class AnalysisStore:
                   s.source, int(s.repeated), s.part) for i, s in enumerate(a.sections)],
             )
             self.conn.executemany(
-                "INSERT INTO bar_energy VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO bar_energy (track_path, bar, start_sec, " + ", ".join(BAR_FIELDS) + ") VALUES ("
+                + ",".join("?" * (3 + len(BAR_FIELDS))) + ")",
                 [(a.track_path, b["bar"], b["start_sec"], *(b.get(k) for k in BAR_FIELDS)) for b in a.bars],
             )
 

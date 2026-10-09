@@ -129,6 +129,17 @@ def bar_features(sp: Spectral, bars: np.ndarray, duration: float) -> BarFeatures
                        normalize(energy) if len(energy) > 2 else energy, timbre, low)
 
 
+def from_bars(bars: list[dict], duration: float) -> BarFeatures:
+    """Rebuild bar features from a stored analysis, so labels can be redone without the audio.
+    (No timbre: only the built-in analyzer's own segmentation needs it.)"""
+    g = lambda k, d=0.0: np.asarray([b.get(k) if b.get(k) is not None else d for b in bars], dtype=float)  # noqa: E731
+    starts = g("start_sec")
+    low = g("low")
+    low_db = np.asarray([b["low_db"] if b.get("low_db") is not None else lv * 30 - 40 for b, lv in zip(bars, low)])
+    return BarFeatures(starts, np.append(starts[1:], duration), g("rms"), low, g("high"), g("centroid"), g("onsets"),
+                       g("energy"), np.zeros((len(bars), 25)), low_db)
+
+
 def kick_present(f: BarFeatures) -> np.ndarray:
     """Per bar: is the low end (kick/bass) in? Relative to the track's own loudest low end."""
     if len(f) == 0:

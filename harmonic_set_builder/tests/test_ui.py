@@ -404,3 +404,25 @@ def test_cue_export_dialog_dry_run(win, tmp_path, monkeypatch):
     text = dlg.out.toPlainText()
     assert "DRY RUN" in text and "hot cue 2 “Drop”" in text and dlg.write_btn.isEnabled()
     assert db.read_bytes() == before
+
+
+def test_phrases_method_picker_switches_views(win):
+    t = win.ctrl.library.tracks[1]
+    a = _fake_analysis(t.location, [("Intro", 0, 16), ("Drop", 16, 64)])
+    store = win.ctrl.analysis_store
+    store.save(a)
+    store.raw_put(t.location, "allin1", a.file_hash, {"analyzer": "allin1==1.1.0", "segments": [
+        {"start": 0, "end": 40, "label": "intro"}, {"start": 40, "end": 128, "label": "chorus"}]})
+    store.raw_put(t.location, "cuedetr", a.file_hash, {"cues": [], "candidates": [[32.0, 0.9], [32.1, 0.9], [32.2, 0.8]]})
+    pv = win.phrases
+    win.show_view(1)
+    from harmonic_set_builder.ui.sources import LIBRARY_KEY
+    pv.set_source(LIBRARY_KEY)
+    pv._select_path(t.location)
+    items = [pv.method.itemData(i) for i in range(pv.method.count())]
+    assert items == ["saved", "allin1:rules", "allin1:raw", "cuedetr"]
+    assert pv.sections.item(1, 0).text() == "Drop"
+    pv.method.setCurrentIndex(items.index("allin1:raw"))
+    assert pv.sections.item(1, 0).text() == "chorus" and not pv.method_note.isHidden()
+    pv.method.setCurrentIndex(items.index("cuedetr"))
+    assert pv.sections.rowCount() == 1 and pv.sections.item(0, 0).text() == "Cue 1"

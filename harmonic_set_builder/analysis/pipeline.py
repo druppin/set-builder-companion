@@ -112,6 +112,7 @@ def analyze(job: Job) -> dict:
         bpm=round(float(bpm), 3), first_downbeat=round(float(bars[0]), 4), duration=round(duration, 3),
         grid=grid_src, sections=sections, phrase_offset=raw_phrase_offset(raw, f.starts),
         bars=[{"bar": i, "start_sec": round(float(f.starts[i]), 4), "energy": round(float(f.energy[i]), 4),
-               **{k: round(float(getattr(f, k)[i]), 4) for k in COMPONENTS}} for i in range(len(f))],
+               **{k: round(float(getattr(f, k)[i]), 4) for k in COMPONENTS},
+               "low_db": round(float(f.low_raw[i]), 2)} for i in range(len(f))],
     )
     return {"analysis": a.to_dict(), "raw": raw.to_dict(), "backend": job.backend, "extra_raw": extra}

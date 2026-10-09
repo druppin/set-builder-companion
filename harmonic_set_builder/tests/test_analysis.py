@@ -347,3 +347,54 @@ def test_parts_split_only_on_model_cuts_and_join_for_summary():
     assert w[0].mean_energy == pytest.approx(0.8)
     assert labels.summary(secs) == "D32 O16"
     assert labels.first(secs, DROP).end_bar == 32
+
+
+# ------------------------------------------------------- transfer / methods
+def test_export_import_round_trip_keyed_by_size(tmp_path):
+    import os
+
+    from harmonic_set_builder.analysis import transfer
+
+    f = tmp_path / "t.mp3"
+    f.write_bytes(b"x" * 100)
+    desk = AnalysisStore(tmp_path / "desk.sqlite")
+    a = _analysis(str(f), [(INTRO, 0, 16), (DROP, 16, 64)])
+    a.file_hash, a.analyzer = file_signature(str(f)), "allin1==1.1.0" + labels.LABELS_TAG
+    desk.save(a)
+    desk.raw_put(str(f), "allin1", a.file_hash, {"analyzer": "allin1==1.1.0", "segments": [{"start": 0, "end": 9, "label": "intro"}]})
+    desk.raw_put(str(f), "cuedetr", a.file_hash, {"cues": [30.0], "candidates": []})
+    out = tmp_path / "hsb-analysis.json.gz"
+    assert transfer.export(desk, out) == 1
+
+    os.utime(f, (1, 1))  # the other machine sees a different timestamp for the same file
+    lap = AnalysisStore(tmp_path / "lap.sqlite")
+    r = transfer.import_file(lap, out)
+    assert r.imported == 1 and not r.size_mismatch
+    assert lap.status(str(f)) == "current"  # matched by size, then adopted this machine's signature
+    assert lap.get(str(f)).file_hash == file_signature(str(f))
+    assert set(lap.raw_backends(str(f))) == {"allin1", "cuedetr"}
+    assert lap.raw_get(str(f), "cuedetr", file_signature(str(f)))["cues"] == [30.0]
+
+    f.write_bytes(b"y" * 50)  # a different file at that path is refused
+    r = transfer.import_file(AnalysisStore(tmp_path / "other.sqlite"), out)
+    assert r.imported == 0 and r.size_mismatch == [str(f)]
+
+
+def test_method_views_from_stored_data():
+    from harmonic_set_builder.analysis import methods
+
+    a = _analysis("/t", [(INTRO, 0, 16), (DROP, 16, 48), (OUTRO, 48, 64)])
+    keys = [k for k, _ in methods.available({"allin1", "raveform", "cuedetr"}, True)]
+    assert keys == ["saved", "allin1:rules", "allin1:raw", "raveform:rules", "raveform:raw", "cuedetr"]
+    raw = {"analyzer": "allin1==1.1.0", "segments": [
+        {"start": 0, "end": 32, "label": "intro"}, {"start": 32, "end": 96, "label": "chorus"},
+        {"start": 96, "end": 128, "label": "outro"}]}
+    v = methods.build("allin1:raw", a, raw)
+    assert [(s.label, s.start_bar) for s in v.sections] == [("intro", 0), ("chorus", 16), ("outro", 48)]
+    v = methods.build("allin1:rules", a, raw)
+    assert v.sections and v.sections[0].start_sec == 0.0
+    rave = {"analyzer": "x", "segments": [{"start": 0, "end": 32, "label": "r4", "probs": [0.1, 0.9]}]}
+    assert methods.build("raveform:raw", a, rave).sections[0].label == "r4 (90%)"
+    cands = [[30.0, 0.9], [30.1, 0.8], [30.2, 0.7]]
+    assert [round(p) for p in methods.build("cuedetr", a, {"candidates": cands}).points] == [30]
+    assert methods.build("saved", a, None).sections == a.sections
