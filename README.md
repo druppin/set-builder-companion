@@ -252,6 +252,10 @@ Defaults from section 9 of the brief are used unless noted.
   before the drop: two of the three rises, a falling or absent low end, a change where it starts (something comes
   in *or* the kick drops out), and a jump in energy or low end at the drop.
 - Sections shorter than 4 bars (except builds) merge into a neighbour.
+- Boundaries the model finds *inside* a section (a 32-bar drop changing at bar 16) are kept as **parts**
+  ("Drop 1", "Drop 1 b") instead of being merged away: on 10 hand-cued tracks, merging them dropped the share of
+  the DJ's own hot cues found from 72% (allin1's raw boundaries) to 56%. Parts get hot cues after whole
+  sections; the Structure column, intro/outro markers and transition tips use whole sections.
 - Boundaries snap to the nearest downbeat, then onto the 8-bar grid when within 1 bar (spec §3.5). The grid
   starts where the track's phrases do: a pickup bar before the first phrase (e.g. AC Slater – *Bass Face*) puts
   every phrase one bar after Mixxx's first downbeat, found from where the section changes fall.

@@ -136,7 +136,9 @@ def plan_track(track_id: int, path: str, title: str, samplerate: int, sections: 
             else:
                 wanted.append(s)
         if len(wanted) > len(free):
-            ranked = sorted(wanted, key=lambda s: (PRIORITY.index(s.label) if s.label in PRIORITY else 99, s.start_sec))
+            # Whole sections first (by label priority), then the phrase changes inside them.
+            ranked = sorted(wanted, key=lambda s: (s.part > 1, PRIORITY.index(s.label) if s.label in PRIORITY else 99,
+                                                   s.start_sec))
             keep = ranked[:len(free)]
             for s in ranked[len(free):]:
                 p.skipped.append(f"{s.name} at {_fmt(s.start_sec)}: no free hot cue slot (of {max_hotcues})")

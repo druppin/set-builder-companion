@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS sections (
   mean_energy REAL,
   source      TEXT,
   repeated    INTEGER DEFAULT 0,
+  part        INTEGER DEFAULT 1,
   PRIMARY KEY (track_path, idx)
 );
 CREATE TABLE IF NOT EXISTS bar_energy (
@@ -136,6 +137,8 @@ class AnalysisStore:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(track_analysis)")}
         if "phrase_offset" not in cols:  # databases from before phrase offsets
             self.conn.execute("ALTER TABLE track_analysis ADD COLUMN phrase_offset INTEGER DEFAULT 0")
+        if "part" not in {r[1] for r in self.conn.execute("PRAGMA table_info(sections)")}:
+            self.conn.execute("ALTER TABLE sections ADD COLUMN part INTEGER DEFAULT 1")
         self.conn.commit()
 
     def close(self) -> None:
@@ -153,9 +156,10 @@ class AnalysisStore:
                  a.duration, a.grid, a.phrase_offset),
             )
             self.conn.executemany(
-                "INSERT INTO sections VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO sections (track_path, idx, label, number, start_sec, end_sec, start_bar, end_bar, "
+                "mean_energy, source, repeated, part) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 [(a.track_path, i, s.label, s.number, s.start_sec, s.end_sec, s.start_bar, s.end_bar, s.mean_energy,
-                  s.source, int(s.repeated)) for i, s in enumerate(a.sections)],
+                  s.source, int(s.repeated), s.part) for i, s in enumerate(a.sections)],
             )
             self.conn.executemany(
                 "INSERT INTO bar_energy VALUES (?,?,?,?,?,?,?,?,?)",
@@ -180,9 +184,9 @@ class AnalysisStore:
                           duration=r[7] or 0.0, grid=r[8] or "", phrase_offset=r[9] or 0)
         a.sections = [
             Section(label=x[0], number=x[1], start_sec=x[2], end_sec=x[3], start_bar=x[4], end_bar=x[5],
-                    mean_energy=x[6], source=x[7], repeated=bool(x[8]))
+                    mean_energy=x[6], source=x[7], repeated=bool(x[8]), part=x[9] or 1)
             for x in self.conn.execute(
-                "SELECT label, number, start_sec, end_sec, start_bar, end_bar, mean_energy, source, repeated "
+                "SELECT label, number, start_sec, end_sec, start_bar, end_bar, mean_energy, source, repeated, part "
                 "FROM sections WHERE track_path = ? ORDER BY idx", (path,))
         ]
         a.bars = [
@@ -196,9 +200,9 @@ class AnalysisStore:
     def index(self) -> dict[str, IndexRow]:
         """Every analyzed path with a one-line section summary (for big tables)."""
         secs: dict[str, list[Section]] = {}
-        for p, label, sb, eb in self.conn.execute(
-                "SELECT track_path, label, start_bar, end_bar FROM sections ORDER BY track_path, idx"):
-            secs.setdefault(p, []).append(Section(label, 0, sb, eb, 0, 0, 0))
+        for p, label, num, sb, eb, part in self.conn.execute(
+                "SELECT track_path, label, number, start_bar, end_bar, part FROM sections ORDER BY track_path, idx"):
+            secs.setdefault(p, []).append(Section(label, num, sb, eb, 0, 0, 0, part=part or 1))
         return {
             p: IndexRow(h, an, at, summary(secs.get(p, [])))
             for p, h, an, at in self.conn.execute("SELECT track_path, file_hash, analyzer, analyzed_at FROM track_analysis")

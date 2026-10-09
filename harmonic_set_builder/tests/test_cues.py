@@ -185,3 +185,13 @@ def test_mixxx_running_detects_this_process_name(monkeypatch, tmp_path):
         assert mc.mixxx_running()
         (proc / "123" / "comm").write_text("bash\n")
         assert not mc.mixxx_running()
+
+
+def test_parts_get_hot_cues_after_whole_sections():
+    with_parts = secs((INTRO, 0, 16), (DROP, 16, 32), (DROP, 32, 48), (BREAKDOWN, 48, 64), (DROP, 64, 96), (OUTRO, 96, 112))
+    with_parts[2].number, with_parts[2].part, with_parts[2].repeated = 1, 2, True  # Drop 1 b
+    with_parts[4].number = 2
+    p = mc.plan_track(1, "/a", "A", SR, with_parts, [], set(), max_hotcues=4)
+    assert [o.label for o in ops(p, "hotcue")] == ["◆ Drop 1", "◆ Breakdown", "◆ Drop 2", "◆ Outro"]
+    p = mc.plan_track(1, "/a", "A", SR, with_parts, [], set(), max_hotcues=8)
+    assert "◆ Drop 1 b" in [o.label for o in ops(p, "hotcue")]

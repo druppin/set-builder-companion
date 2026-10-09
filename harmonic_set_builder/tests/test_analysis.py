@@ -94,7 +94,8 @@ def test_quiet_groove_at_the_edges_becomes_intro_and_outro():
         {"start": 0, "label": "verse"}, {"start": 16, "label": "verse"}, {"start": 32, "label": "chorus"},
         {"start": 64, "label": "verse"}])
     secs = labels.to_sections(raw, _features(e, low=[1] * 40), 80.0)
-    assert [s.label for s in secs] == [INTRO, DROP, OUTRO]
+    assert [s.label for s in labels.whole(secs)] == [INTRO, DROP, OUTRO]
+    assert [(s.name, s.start_bar) for s in secs][:2] == [("Intro", 0), ("Intro b", 8)]  # allin1's cut kept
 
 
 def test_mapping_rules():
@@ -145,7 +146,7 @@ def test_allin1_output_on_dance_music_maps_to_the_real_sections(edm_file):
     job = pipeline.Job(str(edm_file), bpm=edm.BPM, grid={"bpm": edm.BPM, "first_beat": 0.3, "beats": None},
                        backend="allin1", raw=raw)
     a = TrackAnalysis.from_dict(pipeline.analyze(job)["analysis"])
-    got = [(s.label, s.start_bar) for s in a.sections]
+    got = [(s.label, s.start_bar) for s in labels.whole(a.sections)]
     assert got == [(lab, start) for lab, start, _ in edm.expected_bounds()]
 
 
@@ -265,8 +266,11 @@ def test_phrase_grid_offset_from_a_pickup_bar():
     # AC Slater – Bass Face: phrases start one bar after Mixxx's first downbeat.
     secs, raw, f = _real("bass_face")
     assert labels.raw_phrase_offset(raw, f.starts) == 1
-    drops = [s for s in secs if s.label == DROP]
+    drops = [s for s in labels.whole(secs) if s.label == DROP]
     assert [round(s.start_sec, 1) for s in drops] == [32.4, 122.4]  # on allin1's boundaries, not a bar early
+    # allin1's phrase changes inside the drops are kept as parts, where DJs put cues
+    parts = [round(s.start_sec, 1) for s in secs if s.label == DROP and s.part > 1]
+    assert parts == [47.4, 62.4, 137.4, 152.4, 167.4]
     assert all((s.start_bar - 1) % 8 == 0 for s in secs[1:])
 
 
@@ -331,3 +335,15 @@ def test_cluster_cuedetr_candidates():
 
     cands = [[30.2, 0.7], [30.3, 0.9], [30.35, 0.8], [61.0, 0.95], [90.0, 0.65], [90.1, 0.62], [90.2, 0.7]]
     assert [round(t, 1) for t in benchmark.cluster_candidates(cands)] == [30.3, 90.1]  # 61.0 is a lone window
+
+
+def test_parts_split_only_on_model_cuts_and_join_for_summary():
+    assert labels._split(0, 32, [8, 16, 30]) == [(0, 8), (8, 16), (16, 32)]  # 30 would leave 2 bars
+    secs = [Section(DROP, 1, 0, 16, 0, 30, 0.9), Section(DROP, 1, 16, 32, 30, 60, 0.7, part=2),
+            Section(OUTRO, 1, 32, 48, 60, 90, 0.3)]
+    assert secs[1].name == "Drop b"
+    w = labels.whole(secs)
+    assert [(s.label, s.start_bar, s.end_bar) for s in w] == [(DROP, 0, 32), (OUTRO, 32, 48)]
+    assert w[0].mean_energy == pytest.approx(0.8)
+    assert labels.summary(secs) == "D32 O16"
+    assert labels.first(secs, DROP).end_bar == 32

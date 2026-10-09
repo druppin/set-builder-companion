@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from .labels import BREAKDOWN, DROP, INTRO, OUTRO, PHRASE, Section, first, last
+from .labels import BREAKDOWN, DROP, INTRO, OUTRO, PHRASE, Section, first, last, whole
 from .store import TrackAnalysis
 
 
@@ -40,8 +40,7 @@ def _adj(n: int) -> str:
 def _next_after(sections: Sequence[Section], s: Optional[Section]) -> Optional[Section]:
     if s is None:
         return None
-    i = sections.index(s)
-    return sections[i + 1] if i + 1 < len(sections) else None
+    return next((x for x in whole(list(sections)) if x.start_bar >= s.end_bar), None)
 
 
 def suggest(a: TrackAnalysis, b: TrackAnalysis) -> tuple[list[Tip], list[Flag]]:

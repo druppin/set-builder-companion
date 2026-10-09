@@ -6,7 +6,7 @@ module constants so they can be tuned after the validation run.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Optional
 
 import numpy as np
@@ -19,7 +19,7 @@ DJ_LABELS = (INTRO, BUILD, DROP, BREAKDOWN, GROOVE, OUTRO)
 MODEL, DERIVED, MANUAL = "model", "derived", "manual"
 # Bump when the labeling rules change: older results get re-labeled from the cached
 # model output (fast; allin1 isn't re-run).
-LABELS_VERSION = 2
+LABELS_VERSION = 3
 LABELS_TAG = f"+labels{LABELS_VERSION}"
 
 DROP_ENERGY = 0.55  # chorus at or above this mean energy is a Drop
@@ -42,10 +42,12 @@ class Section:
     mean_energy: float
     source: str = MODEL
     repeated: bool = False  # label occurs more than once in the track
+    part: int = 1  # a phrase change inside the section (e.g. a 32-bar drop's second 16) starts part 2
 
     @property
     def name(self) -> str:
-        return f"{self.label} {self.number}" if self.repeated else self.label
+        base = f"{self.label} {self.number}" if self.repeated else self.label
+        return f"{base} {chr(96 + self.part)}" if self.part > 1 else base
 
     @property
     def bars(self) -> int:
@@ -204,6 +206,10 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
                 continue
         with_builds.append((a, b, lab, src))
     merged = _absorb_short(_merge(with_builds))
+    # Merging same-label neighbours above keeps the labels clean, but the boundaries the
+    # model found inside them (a long drop changing at its 16-bar phrase) are exactly where
+    # DJs cue. Keep them as parts of the section.
+    cuts = sorted({a for a, _, _ in spans})
 
     ends = list(bars[1:]) + [duration]
     counts: dict[str, int] = {}
@@ -211,11 +217,22 @@ def to_sections(raw: RawStructure, f: BarFeatures, duration: float, source: str 
     out = []
     for a, b, lab, src in merged:
         counts[lab] = counts.get(lab, 0) + 1
-        out.append(Section(
-            lab, counts[lab], a, b, 0.0 if a == 0 else float(bars[a]), float(ends[b - 1]),
-            round(float(f.energy[a:b].mean()), 4), src, total.get(lab, 0) > 1,
-        ))
+        for part, (pa, pb) in enumerate(_split(a, b, cuts if lab != BUILD else []), 1):
+            out.append(Section(
+                lab, counts[lab], pa, pb, 0.0 if pa == 0 else float(bars[pa]), float(ends[pb - 1]),
+                round(float(f.energy[pa:pb].mean()), 4), src, total.get(lab, 0) > 1, part,
+            ))
     return out
+
+
+def _split(a: int, b: int, cuts: list[int]) -> list[tuple[int, int]]:
+    """[a, b) split at the cuts inside it, never leaving a piece under MIN_BARS."""
+    pieces, start = [], a
+    for c in cuts:
+        if start + MIN_BARS <= c <= b - MIN_BARS:
+            pieces.append((start, c))
+            start = c
+    return pieces + [(start, b)]
 
 
 def _merge(spans: list[tuple[int, int, str, str]]) -> list[tuple[int, int, str, str]]:
@@ -251,15 +268,30 @@ def _absorb_short(spans: list[tuple[int, int, str, str]]) -> list[tuple[int, int
     return _merge(out)
 
 
+def whole(sections: list[Section]) -> list[Section]:
+    """Sections with their parts joined back together (one entry per Drop 1, Drop 2, …)."""
+    out: list[Section] = []
+    for s in sections:
+        if out and s.part > 1 and out[-1].label == s.label and out[-1].number == s.number:
+            p = out[-1]
+            n_p, n_s = p.bars, s.bars
+            energy = round((p.mean_energy * n_p + s.mean_energy * n_s) / max(n_p + n_s, 1), 4)
+            out[-1] = replace(p, end_bar=s.end_bar, end_sec=s.end_sec, mean_energy=energy)
+        else:
+            out.append(replace(s, part=1))
+    return out
+
+
 def summary(sections: list[Section]) -> str:
-    """Compact strip like 'I16 B8 D32 Br16 B8 D32 O16'."""
+    """Compact strip like 'I16 B8 D32 Br16 B8 D32 O16' (parts joined)."""
     short = {INTRO: "I", BUILD: "B", DROP: "D", BREAKDOWN: "Br", GROOVE: "G", OUTRO: "O"}
-    return " ".join(f"{short.get(s.label, s.label[:1])}{s.bars}" for s in sections)
+    return " ".join(f"{short.get(s.label, s.label[:1])}{s.bars}" for s in whole(sections))
 
 
 def first(sections: list[Section], label: str) -> Optional[Section]:
-    return next((s for s in sections if s.label == label), None)
+    """The first whole section with this label (all its parts)."""
+    return next((s for s in whole(sections) if s.label == label), None)
 
 
 def last(sections: list[Section], label: str) -> Optional[Section]:
-    return next((s for s in reversed(sections) if s.label == label), None)
+    return next((s for s in reversed(whole(sections)) if s.label == label), None)
