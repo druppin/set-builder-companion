@@ -23,11 +23,12 @@ fi
 # CUDA compiler and headers only (to build NATTEN): the full cuda-toolkit package also pulls in
 # Nsight, which needs libtinfo5 and can't install on Ubuntu 24.04. CUDA 12.4 accepts 24.04's
 # GCC 13 (12.1 doesn't). The WSL repo has no driver package, by design: Windows provides it.
-if [ ! -x /usr/local/cuda-12.4/bin/nvcc ]; then
+if [ ! -x /usr/local/cuda-12.4/bin/nvcc ] || [ ! -e /usr/local/cuda-12.4/lib64/libnvToolsExt.so ]; then
   wget -q https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
   sudo dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb
   sudo apt-get update
-  sudo apt-get install -y cuda-nvcc-12-4 cuda-cudart-dev-12-4 cuda-libraries-dev-12-4 cuda-cccl-12-4
+  sudo apt-get install -y cuda-nvcc-12-4 cuda-cudart-dev-12-4 cuda-libraries-dev-12-4 cuda-cccl-12-4 \
+    cuda-nvtx-12-4  # PyTorch's CMake config insists on nvToolsExt
 fi
 export CUDA_HOME=/usr/local/cuda-12.4
 export PATH="$CUDA_HOME/bin:$PATH"
