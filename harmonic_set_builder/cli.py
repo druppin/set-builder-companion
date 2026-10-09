@@ -279,53 +279,59 @@ def cmd_benchmark(env: Env, a) -> int:
     a1_python, cd_python = env.allin1_python(), str(default_cuedetr_python(env.data_dir))
     report, items = [], {k: [] for k in METHOD_NAMES}
     for n, t in enumerate(tracks, 1):
-        refs = sorted(c["start"] for c in cues[t.id] if c["type"] == mixxx_cues.HOTCUE and c["start"] is not None)
-        bar = 240.0 / t.bpm if t.bpm else 2.0
-        sig = batch.file_signature(t.location)
-        print(f"[{n}/{len(tracks)}] {t.display}: {len(refs)} hot cues", flush=True)
-        entry = {"track": t.display, "genre": t.genre, "bpm": t.bpm, "path": t.location, "hot_cues": refs,
-                 "methods": {}, "timing": {}}
-        job = lambda backend, raw=None: pipeline.Job(t.location, t.id, t.bpm, grids.get(t.id), backend, a1_python, raw)  # noqa: E731
+        if not os.path.isfile(t.location):
+            print(f"[{n}/{len(tracks)}] {t.display}: skipped, file not found (drive unplugged?)", flush=True)
+            continue
+        try:
+            refs = sorted(c["start"] for c in cues[t.id] if c["type"] == mixxx_cues.HOTCUE and c["start"] is not None)
+            bar = 240.0 / t.bpm if t.bpm else 2.0
+            sig = batch.file_signature(t.location)
+            print(f"[{n}/{len(tracks)}] {t.display}: {len(refs)} hot cues", flush=True)
+            entry = {"track": t.display, "genre": t.genre, "bpm": t.bpm, "path": t.location, "hot_cues": refs,
+                     "methods": {}, "timing": {}}
+            job = lambda backend, raw=None: pipeline.Job(t.location, t.id, t.bpm, grids.get(t.id), backend, a1_python, raw)  # noqa: E731
 
-        def sections(raw):
-            an = pipeline.analyze(job("allin1", raw))["analysis"]
-            return [s for s in an["sections"]]
+            def sections(raw):
+                an = pipeline.analyze(job("allin1", raw))["analysis"]
+                return [s for s in an["sections"]]
 
-        if "builtin" in methods:
-            secs = pipeline.analyze(job("builtin"))["analysis"]["sections"]
-            entry["methods"]["builtin"] = [(s["start_sec"], s["label"]) for s in secs]
-        want = [m for m in ("allin1", "raveform") if m in methods]
-        model_of = {"allin1": "harmonix-all", "raveform": "raveform-fold3"}
-        raws = {m: env.store.raw_get(t.location, m, sig) for m in want}
-        missing = [m for m in want if raws[m] is None]
-        if missing:
-            try:
-                got, timing = structure.run_allin1_models(t.location, a1_python, [model_of[m] for m in missing])
-                entry["timing"]["allin1"] = timing
-                print(f"     allin1 timing: {timing}", flush=True)
-                for m in missing:
-                    raws[m] = got[model_of[m]]
-                    env.store.raw_put(t.location, m, sig, raws[m])
-            except structure.Allin1Error as e:
-                print(f"     allin1 failed: {e}")
-        for m in want:
-            if raws.get(m):
-                entry["methods"][f"{m}:raw"] = [(s["start"], s["label"], s.get("probs")) for s in raws[m]["segments"]]
-                entry["methods"][m] = [(s["start_sec"], s["label"]) for s in sections(raws[m])]
-        if "cuedetr" in methods:
-            raw = env.store.raw_get(t.location, "cuedetr", sig)
-            if raw is None:
+            if "builtin" in methods:
+                secs = pipeline.analyze(job("builtin"))["analysis"]["sections"]
+                entry["methods"]["builtin"] = [(s["start_sec"], s["label"]) for s in secs]
+            want = [m for m in ("allin1", "raveform") if m in methods]
+            model_of = {"allin1": "harmonix-all", "raveform": "raveform-fold3"}
+            raws = {m: env.store.raw_get(t.location, m, sig) for m in want}
+            missing = [m for m in want if raws[m] is None]
+            if missing:
                 try:
-                    raw = structure.run_cuedetr(t.location, cd_python)
-                    env.store.raw_put(t.location, "cuedetr", sig, raw)
+                    got, timing = structure.run_allin1_models(t.location, a1_python, [model_of[m] for m in missing])
+                    entry["timing"]["allin1"] = timing
+                    print(f"     allin1 timing: {timing}", flush=True)
+                    for m in missing:
+                        raws[m] = got[model_of[m]]
+                        env.store.raw_put(t.location, m, sig, raws[m])
                 except structure.Allin1Error as e:
-                    print(f"     CUE-DETR failed: {e}")
-            if raw:
-                entry["methods"]["cuedetr"] = [(c, "cue") for c in raw["cues"]]
-                entry["methods"]["cuedetr:clustered"] = [(c, "cue") for c in benchmark.cluster_candidates(raw["candidates"])]
-        for k, preds in entry["methods"].items():
-            items[k].append((refs, [p[0] for p in preds if p[0] > 0.01], bar))
-        report.append(entry)
+                    print(f"     allin1 failed: {e}")
+            for m in want:
+                if raws.get(m):
+                    entry["methods"][f"{m}:raw"] = [(s["start"], s["label"], s.get("probs")) for s in raws[m]["segments"]]
+                    entry["methods"][m] = [(s["start_sec"], s["label"]) for s in sections(raws[m])]
+            if "cuedetr" in methods:
+                raw = env.store.raw_get(t.location, "cuedetr", sig)
+                if raw is None:
+                    try:
+                        raw = structure.run_cuedetr(t.location, cd_python)
+                        env.store.raw_put(t.location, "cuedetr", sig, raw)
+                    except structure.Allin1Error as e:
+                        print(f"     CUE-DETR failed: {e}")
+                if raw:
+                    entry["methods"]["cuedetr"] = [(c, "cue") for c in raw["cues"]]
+                    entry["methods"]["cuedetr:clustered"] = [(c, "cue") for c in benchmark.cluster_candidates(raw["candidates"])]
+            for k, preds in entry["methods"].items():
+                items[k].append((refs, [p[0] for p in preds if p[0] > 0.01], bar))
+            report.append(entry)
+        except OSError as e:  # e.g. the drive went away mid-track: score what we have
+            print(f"     skipped: {e}", flush=True)
     scores = [benchmark.score(METHOD_NAMES[k], v) for k, v in items.items() if v]
     text = benchmark.table(scores)
     print("\n" + text)
